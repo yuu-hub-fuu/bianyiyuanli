@@ -1,0 +1,15 @@
+[project]
+name = "nexa-compiler"
+version = "0.1.0"
+description = "Nexa teaching compiler with frontend/IR/backend/IDE pipeline"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+llvm = ["llvmlite>=0.43"]
+ide = ["PySide6>=6.6"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
