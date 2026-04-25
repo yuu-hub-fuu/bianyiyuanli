@@ -15,7 +15,7 @@ def _loc(name: str, alloc: dict[str, str | None], slots: dict[str, int]) -> str:
 
 
 def emit_function(fn: MIRFunction, alloc: dict[str, str | None]) -> str:
-    lines = [f"global {fn.name}", f"{fn.name}:", "  push rbp", "  mov rbp, rsp", "  sub rsp, 256"]
+    lines = ["; teaching pseudo x86-64, not ABI-complete", f"global {fn.name}", f"{fn.name}:", "  push rbp", "  mov rbp, rsp", "  sub rsp, 256"]
     slots: dict[str, int] = {}
     arg_buf: list[str] = []
     param_idx = 0

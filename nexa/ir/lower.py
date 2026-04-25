@@ -12,7 +12,7 @@ class Lowerer:
     def lower_module(self, module: ast.Module) -> HIRModule:
         out = HIRModule()
         for item in module.items:
-            if isinstance(item, ast.Function):
+            if isinstance(item, ast.Function) and not item.is_generic_template:
                 out.functions.append(self._lower_fn(item))
         return out
 

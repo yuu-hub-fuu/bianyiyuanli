@@ -87,7 +87,7 @@ class Parser:
         if self._match(TokenKind.ARROW):
             ret = self._parse_type_ref()
         body = self._parse_block()
-        return ast.Function(name.span, name.lexeme, params, ret, body, generics, bounds)
+        return ast.Function(name.span, name.lexeme, params, ret, body, generics, bounds, bool(generics))
 
     def _parse_macro(self) -> ast.Macro:
         name = self._expect(TokenKind.IDENT, "期望宏名")

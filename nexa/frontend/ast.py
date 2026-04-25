@@ -156,6 +156,7 @@ class Function(Node):
     body: Block
     generic_params: list[str] = field(default_factory=list)
     generic_bounds: dict[str, list[str]] = field(default_factory=dict)
+    is_generic_template: bool = False
 
 
 @dataclass(slots=True)

@@ -17,10 +17,18 @@ class FuncSig:
 
 
 @dataclass(slots=True)
+class GenericCallSite:
+    callee: str
+    subst: dict[str, Type]
+    span: object
+
+
+@dataclass(slots=True)
 class SemanticResult:
     module: ast.Module
     symbols: ScopeStack
     functions: dict[str, FuncSig]
+    generic_calls: list[GenericCallSite]
 
 
 class Checker:
@@ -28,6 +36,7 @@ class Checker:
         self.diag = diagnostics or DiagnosticBag()
         self.scopes = ScopeStack()
         self.mode = mode
+        self.generic_calls: list[GenericCallSite] = []
         self.functions: dict[str, FuncSig] = {
             "print": FuncSig([I32], VOID),
             "panic": FuncSig([STR], VOID),
@@ -49,7 +58,7 @@ class Checker:
         for item in module.items:
             if isinstance(item, ast.Function):
                 self._check_function(item)
-        return SemanticResult(module, self.scopes, self.functions)
+        return SemanticResult(module, self.scopes, self.functions, self.generic_calls)
 
     def _check_function(self, fn: ast.Function) -> None:
         self.scopes.push()
@@ -131,15 +140,31 @@ class Checker:
             expr.inferred_type = str(sym.ty)
             return sym.ty
         if isinstance(expr, ast.BlockExpr) and expr.block:
-            # block expression type = last expression stmt type, otherwise void
-            self._check_block(expr.block, VOID, owner_fn)
+            # block expression: first n-1 as statements, last ExprStmt determines value type.
+            self.scopes.push()
             last_ty = VOID
-            if expr.block.stmts and isinstance(expr.block.stmts[-1], ast.ExprStmt):
-                last_ty = self._check_expr(expr.block.stmts[-1].expr, owner_fn)
+            stmts = expr.block.stmts
+            for st in stmts[:-1]:
+                self._check_stmt(st, VOID, owner_fn)
+            if stmts:
+                tail = stmts[-1]
+                if isinstance(tail, ast.ExprStmt):
+                    last_ty = self._check_expr(tail.expr, owner_fn)
+                else:
+                    self._check_stmt(tail, VOID, owner_fn)
+            self.scopes.pop()
             expr.inferred_type = str(last_ty)
             return last_ty
         if isinstance(expr, ast.SelectExpr):
-            seen = []
+            recv_cases = [c for c in expr.cases if c.kind == "recv"]
+            send_cases = [c for c in expr.cases if c.kind == "send"]
+            default_cases = [c for c in expr.cases if c.kind == "default"]
+            if len(default_cases) != 1:
+                self.diag.error(expr.span, "select 必须且只能有一个 default 分支")
+            if not ((len(recv_cases) == 1 and len(send_cases) == 0) or (len(send_cases) == 1 and len(recv_cases) == 0)):
+                self.diag.error(expr.span, "select 仅支持 recv+default 或 send+default 的教学子集")
+
+            seen: list[Type] = []
             for c in expr.cases:
                 if c.kind == "recv" and c.channel:
                     cty = self._check_expr(c.channel, owner_fn)
@@ -156,7 +181,16 @@ class Checker:
                     case_ty = vty
                 else:
                     case_ty = I32
-                self._check_block(c.body, case_ty, owner_fn)
+                # check block as value block: last expression yields case value.
+                self.scopes.push()
+                stmts = c.body.stmts
+                for st in stmts[:-1]:
+                    self._check_stmt(st, VOID, owner_fn)
+                if stmts and isinstance(stmts[-1], ast.ExprStmt):
+                    case_ty = self._check_expr(stmts[-1].expr, owner_fn)
+                elif stmts:
+                    self._check_stmt(stmts[-1], VOID, owner_fn)
+                self.scopes.pop()
                 seen.append(case_ty)
             expr.inferred_type = str(seen[0] if seen else I32)
             return seen[0] if seen else I32
@@ -217,6 +251,7 @@ class Checker:
                         if b == "Ord" and subst[g] not in {I32, STR, BOOL}:
                             self.diag.error(expr.span, f"泛型约束失败: {g}: {b}")
                 ret = self._apply_subst(sig.ret, subst)
+                self.generic_calls.append(GenericCallSite(callee, subst.copy(), expr.span))
                 expr.inferred_type = str(ret)
                 return ret
             else:

@@ -12,6 +12,15 @@ class VMResult:
     stdout: list[str]
 
 
+@dataclass(slots=True)
+class VMFrame:
+    fn: str
+    ip: int
+    instr: str
+    env: dict[str, object]
+    stdout: list[str]
+
+
 class HIRVM:
     def __init__(self, module: HIRModule) -> None:
         self.module = {f.name: f for f in module.functions}
@@ -21,7 +30,12 @@ class HIRVM:
         ret = self._call(entry, [])
         return VMResult(int(ret or 0), self.output)
 
-    def _call(self, name: str, args: list[object]) -> object:
+    def run_with_trace(self, entry: str = "main", max_steps: int = 10000) -> tuple[VMResult, list[VMFrame]]:
+        trace: list[VMFrame] = []
+        ret = self._call(entry, [], trace, max_steps)
+        return VMResult(int(ret or 0), self.output), trace
+
+    def _call(self, name: str, args: list[object], trace: list[VMFrame] | None = None, max_steps: int = 10000) -> object:
         if name == "print":
             self.output.append(str(args[0]))
             return 0
@@ -52,9 +66,15 @@ class HIRVM:
                 labels[ins.dst] = idx
 
         ip = 0
+        steps = 0
         while ip < len(fn.instrs):
             ins = fn.instrs[ip]
             op = ins.op
+            if trace is not None:
+                trace.append(VMFrame(name, ip, ins.op, dict(env), list(self.output)))
+            steps += 1
+            if steps > max_steps:
+                raise RuntimeError("VM: step limit exceeded")
 
             def val(x: str | None) -> object:
                 if x is None:
@@ -94,16 +114,16 @@ class HIRVM:
             elif op == "arg" and ins.src1:
                 pending_args.append(val(ins.src1))
             elif op == "call" and ins.src1:
-                ret = self._call(ins.src1, pending_args)
+                ret = self._call(ins.src1, pending_args, trace, max_steps)
                 pending_args = []
                 if ins.dst:
                     env[ins.dst] = ret
             elif op == "call.recv" and ins.dst:
-                env[ins.dst] = self._call("recv", [val(ins.src1)])
+                env[ins.dst] = self._call("recv", [val(ins.src1)], trace, max_steps)
             elif op == "call.send":
-                self._call("send", [val(ins.src1), val(ins.src2)])
+                self._call("send", [val(ins.src1), val(ins.src2)], trace, max_steps)
             elif op == "call.select_recv" and ins.dst:
-                env[ins.dst] = self._call("select_recv", [val(ins.src1), val(ins.src2)])
+                env[ins.dst] = self._call("select_recv", [val(ins.src1), val(ins.src2)], trace, max_steps)
             elif op == "br.true" and ins.dst:
                 if int(val(ins.src1)) != 0:
                     ip = labels[ins.dst]

@@ -121,9 +121,15 @@ def _suggestions(diag: DiagnosticBag) -> None:
 
 
 
-def llvm_subset_warning(hir_lines: list[str], mode: str, diag: DiagnosticBag) -> None:
-    if mode != "core" and any(x in ln for x in ("const.str", "call.select_recv", "call.send", "call.recv") for ln in hir_lines):
-        diag.warn(Span(0, 0, 1, 1), "LLVM backend only supports core integer subset")
+
+def validate_llvm_subset(hir_lines: list[str]) -> tuple[bool, str]:
+    unsupported = []
+    for ln in hir_lines:
+        if any(k in ln for k in ("const.str", "br.ready", "call.recv", "call.send", "call.select_recv", "mov.Chan")):
+            unsupported.append(ln.strip())
+    if unsupported:
+        return False, "LLVM backend only supports core integer subset"
+    return True, ""
 
 def compile_source(source: str, mode: str = "full", export_dir: str | None = None, run: bool = False) -> BuildResult:
     diag = DiagnosticBag()
@@ -145,7 +151,7 @@ def compile_source(source: str, mode: str = "full", export_dir: str | None = Non
     timeline.append(StageStatus("Sema", not diag.has_errors(), f"symbols={len(sema_pre.symbols.history)}"))
 
     if mode == "full":
-        module = monomorphize(module)
+        module = monomorphize(module, sema_pre.generic_calls)
     timeline.append(StageStatus("Monomorphize", not diag.has_errors(), "enabled" if mode == "full" else "core-mode disabled"))
 
     # Re-run semantic analysis after monomorphization so cloned functions get proper concrete typing.
@@ -160,9 +166,11 @@ def compile_source(source: str, mode: str = "full", export_dir: str | None = Non
     hir_opt_mod = run_optimizations(hir_raw_mod)
     hir_opt_lines = _hir_lines(hir_opt_mod)
     timeline.append(StageStatus("Optimize", True, "const-fold + dce"))
-    llvm_subset_warning(hir_opt_lines, mode, diag)
 
-    llvm_ir = emit_llvm_ir(hir_opt_mod)
+    ok_llvm, llvm_msg = validate_llvm_subset(hir_opt_lines)
+    llvm_ir = emit_llvm_ir(hir_opt_mod) if ok_llvm else ""
+    if not ok_llvm:
+        diag.warn(Span(0, 0, 1, 1), llvm_msg)
     mir_mod = hir_to_mir(hir_opt_mod)
     timeline.append(StageStatus("MIR", True, f"functions={len(mir_mod.functions)}"))
 
