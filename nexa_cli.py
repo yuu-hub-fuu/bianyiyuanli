@@ -19,7 +19,8 @@ def main() -> int:
     ap.add_argument("source", type=Path)
     ap.add_argument("--dump", choices=["tokens", "tables", "ast", "hir", "cfg", "asm", "all"], default="all")
     ap.add_argument("--mode", choices=["core", "full"], default="full")
-    ap.add_argument("--export-dir", default="out")
+    ap.add_argument("--export-dir", default=None)
+    ap.add_argument("--emit-llvm", action="store_true")
     ap.add_argument("--run", action="store_true")
     args = ap.parse_args()
 
@@ -44,6 +45,13 @@ def main() -> int:
         for line in res.run_stdout:
             print(line)
         print(f"exit={res.run_value}")
+
+
+    if args.emit_llvm:
+        if args.mode != "core":
+            print("[warning] LLVM backend only supports core integer subset")
+        print("== LLVM IR ==")
+        print(res.llvm_ir)
 
     if args.dump in {"tokens", "all"}:
         _print_table("TOKENS", res.tokens)

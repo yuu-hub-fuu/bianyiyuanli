@@ -5,7 +5,7 @@
 ```bash
 python -m pip install pytest
 python nexa_cli.py example.nx --mode core --dump tables --run
-python nexa_cli.py example.nx --mode full --dump all --export-dir out
+python nexa_cli.py example.nx --mode full --dump all --export-dir out --emit-llvm
 pytest -q
 ```
 

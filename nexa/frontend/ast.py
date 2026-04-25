@@ -75,6 +75,11 @@ class SelectExpr(Expr):
 
 
 @dataclass(slots=True)
+class BlockExpr(Expr):
+    block: Block | None = None
+
+
+@dataclass(slots=True)
 class Stmt(Node):
     pass
 

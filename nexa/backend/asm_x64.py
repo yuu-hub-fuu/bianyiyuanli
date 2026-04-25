@@ -96,4 +96,9 @@ def emit_function(fn: MIRFunction, alloc: dict[str, str | None]) -> str:
             elif ins.op == "br.true" and ins.dst and ins.args:
                 lines.append(f"  cmp {_loc(ins.args[0], alloc, slots)}, 0")
                 lines.append(f"  jne {ins.dst}")
+            elif ins.op == "br.ready" and ins.dst and ins.args:
+                lines.append(f"  mov rdi, {_loc(ins.args[0], alloc, slots)}")
+                lines.append("  call rt_chan_ready")
+                lines.append("  cmp rax, 0")
+                lines.append(f"  jne {ins.dst}")
     return "\n".join(lines) + "\n"

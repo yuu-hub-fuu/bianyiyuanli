@@ -130,6 +130,14 @@ class Checker:
                 return I32
             expr.inferred_type = str(sym.ty)
             return sym.ty
+        if isinstance(expr, ast.BlockExpr) and expr.block:
+            # block expression type = last expression stmt type, otherwise void
+            self._check_block(expr.block, VOID, owner_fn)
+            last_ty = VOID
+            if expr.block.stmts and isinstance(expr.block.stmts[-1], ast.ExprStmt):
+                last_ty = self._check_expr(expr.block.stmts[-1].expr, owner_fn)
+            expr.inferred_type = str(last_ty)
+            return last_ty
         if isinstance(expr, ast.SelectExpr):
             seen = []
             for c in expr.cases:

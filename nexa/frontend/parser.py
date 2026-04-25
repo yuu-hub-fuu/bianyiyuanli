@@ -105,11 +105,14 @@ class Parser:
 
     def _parse_block(self) -> ast.Block:
         lb = self._expect(TokenKind.LBRACE, "缺少 {")
+        return self._parse_block_after_lbrace(lb.span)
+
+    def _parse_block_after_lbrace(self, lb_span: Span) -> ast.Block:
         stmts: list[ast.Stmt] = []
         while not self._at(TokenKind.RBRACE) and not self._at(TokenKind.EOF):
             stmts.append(self._parse_stmt())
         self._expect(TokenKind.RBRACE, "缺少 }")
-        return ast.Block(lb.span, stmts)
+        return ast.Block(lb_span, stmts)
 
     def _parse_stmt(self) -> ast.Stmt:
         if self._match(TokenKind.LET):
@@ -209,6 +212,8 @@ class Parser:
         elif tok.kind == TokenKind.LPAREN:
             lhs = self._parse_expr()
             self._expect(TokenKind.RPAREN, "缺少 )")
+        elif tok.kind == TokenKind.LBRACE:
+            lhs = ast.BlockExpr(tok.span, None, self._parse_block_after_lbrace(tok.span))
         else:
             self.diag.error(tok.span, f"非法表达式起始: {tok.kind.name}")
             lhs = ast.IntLit(tok.span, None, 0)

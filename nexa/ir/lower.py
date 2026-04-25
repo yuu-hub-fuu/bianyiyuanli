@@ -81,41 +81,68 @@ class Lowerer:
             fn = self._lower_expr(st.expr, hf)
             hf.instrs.append(HIRInstr("spawn", None, fn, None, "void"))
 
-    def _lower_select_expr(self, ex: ast.SelectExpr, hf: HIRFunction) -> str:
-        """Lower select to runtime-subset primitives.
+    def _lower_block_value(self, block: ast.Block, hf: HIRFunction, fallback: str) -> str:
+        if not block.stmts:
+            return fallback
+        for st in block.stmts[:-1]:
+            self._lower_stmt(st, hf)
+        last = block.stmts[-1]
+        if isinstance(last, ast.ExprStmt):
+            return self._lower_expr(last.expr, hf)
+        self._lower_stmt(last, hf)
+        return fallback
 
-        Teaching/full-mode semantics:
-        - select { recv(ch) => {...} default => {...} }
-          lowers to call.select_recv(ch, default_val)
-        - send-cases are lowered as side-effect call.send and value expression.
+    def _lower_select_expr(self, ex: ast.SelectExpr, hf: HIRFunction) -> str:
+        """Runtime-backed select semantics.
+
+        Lowering:
+          br.ready ch, L_recv
+          jmp L_default
+        L_recv:
+          v = recv(ch)
+          res = <recv-body-value or v>
+          jmp L_end
+        L_default:
+          res = <default-body-value or default-const>
+        L_end:
         """
         res = self._tmp()
         recv_case = next((c for c in ex.cases if c.kind == "recv" and c.channel), None)
         default_case = next((c for c in ex.cases if c.kind == "default"), None)
 
-        if recv_case is not None:
+        l_recv, l_default, l_end = self._tmp(), self._tmp(), self._tmp()
+        if recv_case and recv_case.channel:
             ch = self._lower_expr(recv_case.channel, hf)
-            default_val = "0"
-            if default_case and default_case.body.stmts:
-                # support expression-stmt default like `{ 0; }`
-                st = default_case.body.stmts[0]
-                if isinstance(st, ast.ExprStmt):
-                    default_val = self._lower_expr(st.expr, hf)
-            hf.instrs.append(HIRInstr("call.select_recv", res, ch, default_val, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
-            for s in recv_case.body.stmts:
-                self._lower_stmt(s, hf)
-        else:
-            hf.instrs.append(HIRInstr("const.i32", res, "0", None, ex.inferred_type or "i32"))
+            hf.instrs.append(HIRInstr("br.ready", l_recv, ch, None, "bool", (ex.span.line, ex.span.col)))
+        hf.instrs.append(HIRInstr("jmp", l_default, None, None, "void", (ex.span.line, ex.span.col)))
 
-        # keep send/default side effects as teaching subset
+        hf.instrs.append(HIRInstr("label", l_recv, None, None, "void", (ex.span.line, ex.span.col)))
+        recv_val = self._tmp()
+        if recv_case and recv_case.channel:
+            ch = self._lower_expr(recv_case.channel, hf)
+            hf.instrs.append(HIRInstr("call.recv", recv_val, ch, "1", ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+        else:
+            hf.instrs.append(HIRInstr("const.i32", recv_val, "0", None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+        recv_out = self._lower_block_value(recv_case.body, hf, recv_val) if recv_case else recv_val
+        hf.instrs.append(HIRInstr("mov.i32", res, recv_out, None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+        hf.instrs.append(HIRInstr("jmp", l_end, None, None, "void", (ex.span.line, ex.span.col)))
+
+        hf.instrs.append(HIRInstr("label", l_default, None, None, "void", (ex.span.line, ex.span.col)))
+        default_val = self._tmp()
+        hf.instrs.append(HIRInstr("const.i32", default_val, "0", None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+        if default_case:
+            d_out = self._lower_block_value(default_case.body, hf, default_val)
+            hf.instrs.append(HIRInstr("mov.i32", res, d_out, None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+        else:
+            hf.instrs.append(HIRInstr("mov.i32", res, default_val, None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+
+        hf.instrs.append(HIRInstr("label", l_end, None, None, "void", (ex.span.line, ex.span.col)))
+
         for c in ex.cases:
             if c.kind == "send" and c.channel and c.value:
                 ch = self._lower_expr(c.channel, hf)
                 v = self._lower_expr(c.value, hf)
-                hf.instrs.append(HIRInstr("call.send", None, ch, v, "void"))
-            elif c.kind == "default" and c is not default_case:
-                for s in c.body.stmts:
-                    self._lower_stmt(s, hf)
+                hf.instrs.append(HIRInstr("call.send", None, ch, v, "void", (ex.span.line, ex.span.col)))
         return res
 
     def _lower_expr(self, ex: ast.Expr, hf: HIRFunction) -> str:
@@ -127,6 +154,12 @@ class Lowerer:
             t = self._tmp(); hf.instrs.append(HIRInstr("const.str", t, ex.value, None, "str", (ex.span.line, ex.span.col))); return t
         if isinstance(ex, ast.NameExpr):
             return ex.name
+        if isinstance(ex, ast.BlockExpr) and ex.block:
+            t = self._tmp()
+            zero = self._tmp(); hf.instrs.append(HIRInstr("const.i32", zero, "0", None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+            out = self._lower_block_value(ex.block, hf, zero)
+            hf.instrs.append(HIRInstr("mov.i32", t, out, None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+            return t
         if isinstance(ex, ast.SelectExpr):
             return self._lower_select_expr(ex, hf)
         if isinstance(ex, ast.UnaryExpr) and ex.rhs:
@@ -166,7 +199,7 @@ def hir_to_mir(hir: HIRModule) -> MIRModule:
             mi = MIRInstr(h.op, args, h.dst)
             current.instrs.append(mi)
 
-            if h.op == "br.true" and h.dst:
+            if h.op in {"br.true", "br.ready"} and h.dst:
                 tblock = ensure_block(h.dst)
                 current.succs.add(h.dst); tblock.preds.add(current.label)
                 fall = ensure_block(f"fall_{len(mf.order)}")

@@ -24,6 +24,8 @@ class NexaStudio(tk.Tk):
         self.editor.pack(fill=tk.BOTH, expand=True)
         self.editor.insert("1.0", "fn main() -> i32 { let a: i32 = 1 + 2 * 3; return a; }")
         ttk.Button(left, text="Compile", command=self.compile_now).pack(anchor="w", pady=6)
+        ttk.Button(left, text="Apply Fix", command=self.apply_first_fix).pack(anchor="w", pady=2)
+        self.last_result = None
         top.add(left, weight=3)
 
         right = ttk.Notebook(top)
@@ -50,6 +52,7 @@ class NexaStudio(tk.Tk):
     def compile_now(self) -> None:
         src = self.editor.get("1.0", tk.END)
         res = compile_source(src, mode="full", export_dir="out")
+        self.last_result = res
         self._set("Token", "\n".join(res.tokens))
         self._set("AST", res.ast_text)
         # Symbol tree view (global -> scope)
@@ -85,6 +88,20 @@ class NexaStudio(tk.Tk):
                 lines.extend(f"  note: {n}" for n in d.notes)
                 lines.extend(f"  fix: {f}" for f in d.fixits)
             self.diag.insert("1.0", "\n".join(lines))
+
+
+    def apply_first_fix(self) -> None:
+        if self.last_result is None:
+            return
+        for d in self.last_result.diagnostics:
+            if not d.fixits:
+                continue
+            if "分号" in d.message:
+                idx = f"{d.span.line}.{max(d.span.col-1, 0)}"
+                self.editor.insert(idx, ";")
+                self.compile_now()
+                return
+
 
 
 def main() -> None:

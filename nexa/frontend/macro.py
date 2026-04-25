@@ -45,13 +45,14 @@ class MacroExpander:
             name = stmt.expr.callee.name
             if name in env.macros:
                 return self._expand_macro_call(stmt.expr, env, depth + 1)
+
         if isinstance(stmt, ast.IfStmt):
             stmt.then_block = self._expand_block(stmt.then_block, env, depth)
             if stmt.else_block:
                 stmt.else_block = self._expand_block(stmt.else_block, env, depth)
-        if isinstance(stmt, ast.WhileStmt):
+        elif isinstance(stmt, ast.WhileStmt):
             stmt.body = self._expand_block(stmt.body, env, depth)
-        if isinstance(stmt, ast.Block):
+        elif isinstance(stmt, ast.Block):
             stmt = self._expand_block(stmt, env, depth)
         return [stmt]
 
@@ -62,70 +63,70 @@ class MacroExpander:
             self.diag.error(call.span, f"宏 {macro.name} 参数数量不匹配")
             return [ast.ExprStmt(call.span, call)]
 
-        # AST-level macro expansion with depth limit + teaching gensym renaming
         bind = dict(zip(macro.params, call.args, strict=True))
         cloned = self._clone_block(macro.body, bind)
-        renamed = self._gensym_block(cloned, macro.name)
-        return self._expand_block(renamed, env, depth).stmts
+        self._gensym_stmt(cloned, macro.name, [{}])
+        return self._expand_block(cloned, env, depth).stmts
 
+    def _gensym_stmt(self, stmt: ast.Stmt, macro_name: str, scopes: list[dict[str, str]]) -> None:
+        def resolve(name: str) -> str:
+            for m in reversed(scopes):
+                if name in m:
+                    return m[name]
+            return name
 
-    def _gensym_block(self, block: ast.Block, macro_name: str) -> ast.Block:
-        mapping: dict[str, str] = {}
-        for st in block.stmts:
-            if isinstance(st, ast.LetStmt):
-                old = st.name
-                self.gensym_counter += 1
-                new = f"__macro_{macro_name}_{self.gensym_counter}_{old}"
-                mapping[old] = new
-                st.name = new
-        for st in block.stmts:
-            self._rename_in_stmt(st, mapping)
-        return block
+        def rename_expr(expr: ast.Expr) -> None:
+            if isinstance(expr, ast.NameExpr):
+                expr.name = resolve(expr.name)
+            elif isinstance(expr, ast.UnaryExpr) and expr.rhs:
+                rename_expr(expr.rhs)
+            elif isinstance(expr, ast.BinaryExpr) and expr.lhs and expr.rhs:
+                rename_expr(expr.lhs); rename_expr(expr.rhs)
+            elif isinstance(expr, ast.CallExpr):
+                if expr.callee:
+                    rename_expr(expr.callee)
+                for a in expr.args:
+                    rename_expr(a)
+            elif isinstance(expr, ast.SelectExpr):
+                for c in expr.cases:
+                    if c.channel:
+                        rename_expr(c.channel)
+                    if c.value:
+                        rename_expr(c.value)
+            elif isinstance(expr, ast.BlockExpr) and expr.block:
+                self._gensym_stmt(expr.block, macro_name, scopes)
 
-    def _rename_in_expr(self, expr: ast.Expr, mapping: dict[str, str]) -> None:
-        if isinstance(expr, ast.NameExpr) and expr.name in mapping:
-            expr.name = mapping[expr.name]
-        elif isinstance(expr, ast.UnaryExpr) and expr.rhs:
-            self._rename_in_expr(expr.rhs, mapping)
-        elif isinstance(expr, ast.BinaryExpr) and expr.lhs and expr.rhs:
-            self._rename_in_expr(expr.lhs, mapping); self._rename_in_expr(expr.rhs, mapping)
-        elif isinstance(expr, ast.CallExpr):
-            if expr.callee:
-                self._rename_in_expr(expr.callee, mapping)
-            for a in expr.args:
-                self._rename_in_expr(a, mapping)
-        elif isinstance(expr, ast.SelectExpr):
-            for c in expr.cases:
-                if c.channel:
-                    self._rename_in_expr(c.channel, mapping)
-                if c.value:
-                    self._rename_in_expr(c.value, mapping)
+        if isinstance(stmt, ast.Block):
+            scopes.append({})
+            for s in stmt.stmts:
+                self._gensym_stmt(s, macro_name, scopes)
+            scopes.pop()
+            return
 
-    def _rename_in_stmt(self, st: ast.Stmt, mapping: dict[str, str]) -> None:
-        if isinstance(st, ast.LetStmt) and st.value:
-            self._rename_in_expr(st.value, mapping)
-        elif isinstance(st, ast.AssignStmt):
-            if st.target.name in mapping:
-                st.target.name = mapping[st.target.name]
-            self._rename_in_expr(st.value, mapping)
-        elif isinstance(st, ast.ExprStmt):
-            self._rename_in_expr(st.expr, mapping)
-        elif isinstance(st, ast.ReturnStmt) and st.value:
-            self._rename_in_expr(st.value, mapping)
-        elif isinstance(st, ast.IfStmt):
-            self._rename_in_expr(st.cond, mapping)
-            for x in st.then_block.stmts:
-                self._rename_in_stmt(x, mapping)
-            if st.else_block:
-                for x in st.else_block.stmts:
-                    self._rename_in_stmt(x, mapping)
-        elif isinstance(st, ast.WhileStmt):
-            self._rename_in_expr(st.cond, mapping)
-            for x in st.body.stmts:
-                self._rename_in_stmt(x, mapping)
-        elif isinstance(st, ast.Block):
-            for x in st.stmts:
-                self._rename_in_stmt(x, mapping)
+        if isinstance(stmt, ast.LetStmt):
+            if stmt.value:
+                rename_expr(stmt.value)
+            self.gensym_counter += 1
+            new = f"__macro_{macro_name}_{self.gensym_counter}_{stmt.name}"
+            scopes[-1][stmt.name] = new
+            stmt.name = new
+            return
+
+        if isinstance(stmt, ast.AssignStmt):
+            stmt.target.name = resolve(stmt.target.name)
+            rename_expr(stmt.value)
+        elif isinstance(stmt, ast.ExprStmt):
+            rename_expr(stmt.expr)
+        elif isinstance(stmt, ast.ReturnStmt) and stmt.value:
+            rename_expr(stmt.value)
+        elif isinstance(stmt, ast.IfStmt):
+            rename_expr(stmt.cond)
+            self._gensym_stmt(stmt.then_block, macro_name, scopes)
+            if stmt.else_block:
+                self._gensym_stmt(stmt.else_block, macro_name, scopes)
+        elif isinstance(stmt, ast.WhileStmt):
+            rename_expr(stmt.cond)
+            self._gensym_stmt(stmt.body, macro_name, scopes)
 
     def _clone_expr(self, expr: ast.Expr, bind: dict[str, ast.Expr]) -> ast.Expr:
         if isinstance(expr, ast.NameExpr) and expr.name in bind:
@@ -141,6 +142,8 @@ class MacroExpander:
                                     self._clone_expr(c.value, bind) if c.value else None,
                                     self._clone_block(c.body, bind)) for c in expr.cases]
             return ast.SelectExpr(expr.span, expr.inferred_type, cases)
+        if isinstance(expr, ast.BlockExpr) and expr.block:
+            return ast.BlockExpr(expr.span, expr.inferred_type, self._clone_block(expr.block, bind))
         return expr
 
     def _clone_stmt(self, stmt: ast.Stmt, bind: dict[str, ast.Expr]) -> ast.Stmt:
@@ -149,7 +152,10 @@ class MacroExpander:
         if isinstance(stmt, ast.AssignStmt):
             return ast.AssignStmt(stmt.span, stmt.target, self._clone_expr(stmt.value, bind))
         if isinstance(stmt, ast.ExprStmt):
-            return ast.ExprStmt(stmt.span, self._clone_expr(stmt.expr, bind))
+            ex = self._clone_expr(stmt.expr, bind)
+            if isinstance(ex, ast.BlockExpr) and ex.block:
+                return ex.block
+            return ast.ExprStmt(stmt.span, ex)
         if isinstance(stmt, ast.ReturnStmt):
             return ast.ReturnStmt(stmt.span, self._clone_expr(stmt.value, bind) if stmt.value else None)
         if isinstance(stmt, ast.IfStmt):

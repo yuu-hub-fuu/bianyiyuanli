@@ -36,6 +36,8 @@ class HIRVM:
         if name == "select_recv":
             return rt_core.rt_select_recv([args[0]], default=args[1])
 
+        if name not in self.module:
+            raise RuntimeError(f"VM: undefined function {name}")
         fn = self.module[name]
         env: dict[str, object] = {}
         labels: dict[str, int] = {}
@@ -104,6 +106,11 @@ class HIRVM:
                 env[ins.dst] = self._call("select_recv", [val(ins.src1), val(ins.src2)])
             elif op == "br.true" and ins.dst:
                 if int(val(ins.src1)) != 0:
+                    ip = labels[ins.dst]
+                    continue
+            elif op == "br.ready" and ins.dst:
+                ch = val(ins.src1)
+                if hasattr(ch, "q") and not ch.q.empty():
                     ip = labels[ins.dst]
                     continue
             elif op == "jmp" and ins.dst:

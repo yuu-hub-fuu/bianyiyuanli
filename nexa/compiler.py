@@ -4,10 +4,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from nexa.backend.asm_x64 import emit_function
+from nexa.backend.llvm_backend import emit_llvm_ir
 from nexa.backend.regalloc import compute_intervals, linear_scan
 from nexa.frontend import ast
-from nexa.frontend.diagnostics import Diagnostic, DiagnosticBag
+from nexa.frontend.diagnostics import Diagnostic, DiagnosticBag, Level
 from nexa.frontend.lexer import LexTables, Lexer
+from nexa.frontend.tokens import Span
 from nexa.frontend.macro import MacroExpander
 from nexa.frontend.parser import Parser
 from nexa.ir.lower import Lowerer, hir_to_mir
@@ -39,6 +41,7 @@ class BuildResult:
     timeline: list[StageStatus] = field(default_factory=list)
     run_value: int | None = None
     run_stdout: list[str] = field(default_factory=list)
+    llvm_ir: str = ""
 
 
 def _ast_dump(node: object, indent: int = 0) -> list[str]:
@@ -116,6 +119,12 @@ def _suggestions(diag: DiagnosticBag) -> None:
             d.fixits.append("先使用 let 声明该变量")
 
 
+
+
+def llvm_subset_warning(hir_lines: list[str], mode: str, diag: DiagnosticBag) -> None:
+    if mode != "core" and any(x in ln for x in ("const.str", "call.select_recv", "call.send", "call.recv") for ln in hir_lines):
+        diag.warn(Span(0, 0, 1, 1), "LLVM backend only supports core integer subset")
+
 def compile_source(source: str, mode: str = "full", export_dir: str | None = None, run: bool = False) -> BuildResult:
     diag = DiagnosticBag()
     timeline: list[StageStatus] = []
@@ -132,12 +141,16 @@ def compile_source(source: str, mode: str = "full", export_dir: str | None = Non
         module = MacroExpander(diag).expand_module(module)
     timeline.append(StageStatus("MacroExpand", not diag.has_errors(), "enabled" if mode == "full" else "core-mode disabled"))
 
-    sema: SemanticResult = Checker(diag, mode=mode).analyze(module)
-    timeline.append(StageStatus("Sema", not diag.has_errors(), f"symbols={len(sema.symbols.history)}"))
+    sema_pre: SemanticResult = Checker(diag, mode=mode).analyze(module)
+    timeline.append(StageStatus("Sema", not diag.has_errors(), f"symbols={len(sema_pre.symbols.history)}"))
 
     if mode == "full":
         module = monomorphize(module)
     timeline.append(StageStatus("Monomorphize", not diag.has_errors(), "enabled" if mode == "full" else "core-mode disabled"))
+
+    # Re-run semantic analysis after monomorphization so cloned functions get proper concrete typing.
+    sema: SemanticResult = Checker(diag, mode=mode).analyze(module)
+    timeline.append(StageStatus("Sema(redo)", not diag.has_errors(), f"symbols={len(sema.symbols.history)}"))
 
     lowerer = Lowerer()
     hir_raw_mod = lowerer.lower_module(module)
@@ -147,7 +160,9 @@ def compile_source(source: str, mode: str = "full", export_dir: str | None = Non
     hir_opt_mod = run_optimizations(hir_raw_mod)
     hir_opt_lines = _hir_lines(hir_opt_mod)
     timeline.append(StageStatus("Optimize", True, "const-fold + dce"))
+    llvm_subset_warning(hir_opt_lines, mode, diag)
 
+    llvm_ir = emit_llvm_ir(hir_opt_mod)
     mir_mod = hir_to_mir(hir_opt_mod)
     timeline.append(StageStatus("MIR", True, f"functions={len(mir_mod.functions)}"))
 
@@ -169,9 +184,13 @@ def compile_source(source: str, mode: str = "full", export_dir: str | None = Non
     run_value = None
     run_stdout: list[str] = []
     if run and not diag.has_errors():
-        vm_res = HIRVM(hir_opt_mod).run("main")
-        run_value = vm_res.return_value
-        run_stdout = vm_res.stdout
+        try:
+            vm_res = HIRVM(hir_opt_mod).run("main")
+            run_value = vm_res.return_value
+            run_stdout = vm_res.stdout
+        except Exception as exc:  # noqa: BLE001
+            run_stdout = [f"runtime error: {exc}"]
+            diag.add(Level.ERROR, Span(0, 0, 1, 1), f"运行时错误: {exc}")
 
     if export_dir:
         _export_graphs(module, mir_mod, export_dir)
@@ -189,6 +208,7 @@ def compile_source(source: str, mode: str = "full", export_dir: str | None = Non
         timeline=timeline,
         run_value=run_value,
         run_stdout=run_stdout,
+        llvm_ir=llvm_ir,
     )
 
 

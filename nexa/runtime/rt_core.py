@@ -49,3 +49,7 @@ def rt_print_str(v: str) -> None:
 
 def rt_panic(msg: str) -> None:
     raise RuntimeError(msg)
+
+
+def rt_chan_ready(ch: Chan) -> int:
+    return 0 if ch.q.empty() else 1

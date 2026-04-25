@@ -16,6 +16,6 @@ fn main() -> i32 {
         recv(ch) => { 42; }
         default => { 0; }
     };
-    unless(ans == 42, panic("bad"));
+    unless(ans == 42, { panic("bad"); });
     return max(ans, 40);
 }
