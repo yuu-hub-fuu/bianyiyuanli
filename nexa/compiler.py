@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from nexa.backend.asm_x64 import emit_function
-from nexa.backend.llvm_backend import emit_llvm_ir
+from nexa.backend.llvm_backend import emit_llvm_ir, validate_llvm_subset
 from nexa.backend.regalloc import compute_intervals, linear_scan
 from nexa.frontend import ast
 from nexa.frontend.diagnostics import Diagnostic, DiagnosticBag, Level
@@ -21,28 +21,33 @@ from nexa.vm import HIRVM, VMFrame
 
 
 @dataclass(slots=True)
-class StageStatus:
+class StageResult:
     name: str
-    ok: bool
+    status: str
     detail: str
+
+
+@dataclass(slots=True)
+class BuildArtifacts:
+    tokens: list[str] = field(default_factory=list)
+    tables: dict[str, list[str]] = field(default_factory=dict)
+    ast_text: str = ""
+    symbols: list[str] = field(default_factory=list)
+    hir_raw: HIRModule | None = None
+    hir_opt: HIRModule | None = None
+    cfg: dict[str, list[str]] = field(default_factory=dict)
+    asm: dict[str, str] = field(default_factory=dict)
+    llvm_ir: str = ""
 
 
 @dataclass(slots=True)
 class BuildResult:
     diagnostics: list[Diagnostic]
-    tokens: list[str]
-    tables: dict[str, list[str]]
-    ast_text: str
-    symbols: list[str]
-    hir_raw: list[str]
-    hir_opt: list[str]
-    cfg: dict[str, list[str]]
-    asm: dict[str, str]
-    timeline: list[StageStatus] = field(default_factory=list)
+    artifacts: BuildArtifacts
+    timeline: list[StageResult] = field(default_factory=list)
     run_value: int | None = None
     run_stdout: list[str] = field(default_factory=list)
     vm_trace: list[VMFrame] = field(default_factory=list)
-    llvm_ir: str = ""
 
 
 def _ast_dump(node: object, indent: int = 0) -> list[str]:
@@ -91,10 +96,13 @@ def _ast_dump(node: object, indent: int = 0) -> list[str]:
 
 def _hir_lines(hir_mod) -> list[str]:
     lines: list[str] = []
+    if hir_mod is None:
+        return lines
     for fn in hir_mod.functions:
         lines.append(f"{fn.name}:")
         for idx, i in enumerate(fn.instrs, 1):
-            lines.append(f"  {idx:03d}: ({i.op}, {i.src1}, {i.src2}, {i.dst}) @{i.span[0]}:{i.span[1]}")
+            args = ", ".join(i.args)
+            lines.append(f"  {idx:03d}: ({i.kind.name}, op={i.op}, args=[{args}], dst={i.dst}, target={i.target}, ty={i.ty}) @{i.span[0]}:{i.span[1]}")
     return lines
 
 
@@ -118,20 +126,6 @@ def _suggestions(diag: DiagnosticBag) -> None:
             d.fixits.append("在此处插入 ';'")
         if "未声明" in d.message and not d.fixits:
             d.fixits.append("先使用 let 声明该变量")
-
-
-
-
-
-def validate_llvm_subset(hir_lines: list[str]) -> tuple[bool, str]:
-    unsupported = []
-    for ln in hir_lines:
-        if any(k in ln for k in ("const.str", "br.ready", "call.recv", "call.send", "call.select_recv", "mov.Chan")):
-            unsupported.append(ln.strip())
-    if unsupported:
-        return False, "LLVM backend only supports core integer subset"
-    return True, ""
-
 def compile_source(
     source: str,
     mode: str = "full",
@@ -140,46 +134,102 @@ def compile_source(
     trace: bool = False,
 ) -> BuildResult:
     diag = DiagnosticBag()
-    timeline: list[StageStatus] = []
+    timeline: list[StageResult] = []
+    artifacts = BuildArtifacts()
+
+    def stage(name: str, status: str, detail: str) -> None:
+        timeline.append(StageResult(name, status, detail))
 
     lexer = Lexer(source, diag)
     tokens = lexer.scan()
-    timeline.append(StageStatus("Lexer", not diag.has_errors(), f"tokens={len(tokens)}"))
+    artifacts.tokens = [f"{t.kind.name}:{t.lexeme}" for t in tokens]
+    stage("Lexer", "failed" if diag.has_errors() else "ok", f"tokens={len(tokens)}")
+    if diag.has_errors():
+        stage("Parser", "skipped", "blocked by lexer errors")
+        stage("MacroExpand", "skipped", "blocked")
+        stage("Sema", "skipped", "blocked")
+        stage("Monomorphize", "skipped", "blocked")
+        stage("Sema(redo)", "skipped", "blocked")
+        stage("HIR", "skipped", "blocked")
+        stage("Optimize", "skipped", "blocked")
+        stage("MIR", "skipped", "blocked")
+        stage("RegAlloc", "skipped", "blocked")
+        stage("Backend", "skipped", "blocked")
+        _suggestions(diag)
+        return BuildResult(diagnostics=diag.items, artifacts=artifacts, timeline=timeline)
 
     parser = Parser(tokens, diag)
     module = parser.parse()
-    timeline.append(StageStatus("Parser", not diag.has_errors(), f"items={len(module.items)}"))
+    artifacts.ast_text = "\n".join(_ast_dump(module))
+    stage("Parser", "failed" if diag.has_errors() else "ok", f"items={len(module.items)}")
+    if diag.has_errors():
+        stage("MacroExpand", "skipped", "blocked by parser errors")
+        stage("Sema", "skipped", "blocked")
+        stage("Monomorphize", "skipped", "blocked")
+        stage("Sema(redo)", "skipped", "blocked")
+        stage("HIR", "skipped", "blocked")
+        stage("Optimize", "skipped", "blocked")
+        stage("MIR", "skipped", "blocked")
+        stage("RegAlloc", "skipped", "blocked")
+        stage("Backend", "skipped", "blocked")
+        _suggestions(diag)
+        return BuildResult(diagnostics=diag.items, artifacts=artifacts, timeline=timeline)
 
     if mode == "full":
         module = MacroExpander(diag).expand_module(module)
-    timeline.append(StageStatus("MacroExpand", not diag.has_errors(), "enabled" if mode == "full" else "core-mode disabled"))
+    stage("MacroExpand", "failed" if diag.has_errors() else "ok", "enabled" if mode == "full" else "core-mode disabled")
+    artifacts.ast_text = "\n".join(_ast_dump(module))
 
     sema_pre: SemanticResult = Checker(diag, mode=mode).analyze(module)
-    timeline.append(StageStatus("Sema", not diag.has_errors(), f"symbols={len(sema_pre.symbols.history)}"))
+    stage("Sema", "failed" if diag.has_errors() else "ok", f"symbols={len(sema_pre.symbols.history)}")
+    if diag.has_errors():
+        stage("Monomorphize", "skipped", "blocked by sema errors")
+        stage("Sema(redo)", "skipped", "blocked")
+        stage("HIR", "skipped", "blocked")
+        stage("Optimize", "skipped", "blocked")
+        stage("MIR", "skipped", "blocked")
+        stage("RegAlloc", "skipped", "blocked")
+        stage("Backend", "skipped", "blocked")
+        artifacts.tables = _format_tables(lexer.tables, sema_pre, [])
+        artifacts.symbols = [f"{n:<12} {c:<8} {t:<12} scope={sid} slot={slot}" for n, c, t, sid, slot in sema_pre.symbols.dump_rows()]
+        _suggestions(diag)
+        return BuildResult(diagnostics=diag.items, artifacts=artifacts, timeline=timeline)
 
     if mode == "full":
         module = monomorphize(module, sema_pre.generic_calls)
-    timeline.append(StageStatus("Monomorphize", not diag.has_errors(), "enabled" if mode == "full" else "core-mode disabled"))
+    stage("Monomorphize", "failed" if diag.has_errors() else "ok", "enabled" if mode == "full" else "core-mode disabled")
 
     # Re-run semantic analysis after monomorphization so cloned functions get proper concrete typing.
     sema: SemanticResult = Checker(diag, mode=mode).analyze(module)
-    timeline.append(StageStatus("Sema(redo)", not diag.has_errors(), f"symbols={len(sema.symbols.history)}"))
+    stage("Sema(redo)", "failed" if diag.has_errors() else "ok", f"symbols={len(sema.symbols.history)}")
+    if diag.has_errors():
+        stage("HIR", "skipped", "blocked by sema errors")
+        stage("Optimize", "skipped", "blocked")
+        stage("MIR", "skipped", "blocked")
+        stage("RegAlloc", "skipped", "blocked")
+        stage("Backend", "skipped", "blocked")
+        artifacts.tables = _format_tables(lexer.tables, sema, [])
+        artifacts.symbols = [f"{n:<12} {c:<8} {t:<12} scope={sid} slot={slot}" for n, c, t, sid, slot in sema.symbols.dump_rows()]
+        _suggestions(diag)
+        return BuildResult(diagnostics=diag.items, artifacts=artifacts, timeline=timeline)
 
     lowerer = Lowerer()
     hir_raw_mod = lowerer.lower_module(module)
     hir_raw_lines = _hir_lines(hir_raw_mod)
-    timeline.append(StageStatus("HIR", True, f"instrs={sum(len(f.instrs) for f in hir_raw_mod.functions)}"))
+    artifacts.hir_raw = hir_raw_mod
+    stage("HIR", "ok", f"instrs={sum(len(f.instrs) for f in hir_raw_mod.functions)}")
 
     hir_opt_mod = run_optimizations(hir_raw_mod)
     hir_opt_lines = _hir_lines(hir_opt_mod)
-    timeline.append(StageStatus("Optimize", True, "const-fold + dce"))
+    artifacts.hir_opt = hir_opt_mod
+    stage("Optimize", "ok", "const-fold + dce")
 
-    ok_llvm, llvm_msg = validate_llvm_subset(hir_opt_lines)
+    ok_llvm, llvm_msg = validate_llvm_subset(hir_opt_mod)
     llvm_ir = emit_llvm_ir(hir_opt_mod) if ok_llvm else ""
     if not ok_llvm:
         diag.warn(Span(0, 0, 1, 1), llvm_msg)
     mir_mod = hir_to_mir(hir_opt_mod)
-    timeline.append(StageStatus("MIR", True, f"functions={len(mir_mod.functions)}"))
+    stage("MIR", "ok", f"functions={len(mir_mod.functions)}")
 
     asm: dict[str, str] = {}
     cfg_dump: dict[str, list[str]] = {}
@@ -188,13 +238,18 @@ def compile_source(
         alloc = linear_scan(intervals, ["r10", "r11", "r12", "r13", "r14", "r15"])
         asm[fn.name] = emit_function(fn, alloc)
         cfg_dump[fn.name] = _cfg_dump(fn)
-    timeline.append(StageStatus("RegAlloc", True, "linear-scan"))
-    timeline.append(StageStatus("Backend", True, f"asm-fns={len(asm)}"))
+    stage("RegAlloc", "ok", "linear-scan")
+    stage("Backend", "warning" if not ok_llvm else "ok", f"asm-fns={len(asm)}")
 
     _suggestions(diag)
 
-    tables = _format_tables(lexer.tables, sema, hir_opt_lines)
-    symbols = [f"{n:<12} {c:<8} {t:<12} scope={sid} slot={slot}" for n, c, t, sid, slot in sema.symbols.dump_rows()]
+    artifacts.tables = _format_tables(lexer.tables, sema, hir_opt_lines)
+    artifacts.tables["hir_raw"] = hir_raw_lines
+    artifacts.tables["hir_opt"] = hir_opt_lines
+    artifacts.symbols = [f"{n:<12} {c:<8} {t:<12} scope={sid} slot={slot}" for n, c, t, sid, slot in sema.symbols.dump_rows()]
+    artifacts.cfg = cfg_dump
+    artifacts.asm = asm
+    artifacts.llvm_ir = llvm_ir
 
     run_value = None
     run_stdout: list[str] = []
@@ -217,19 +272,11 @@ def compile_source(
 
     return BuildResult(
         diagnostics=diag.items,
-        tokens=[f"{t.kind.name}:{t.lexeme}" for t in tokens],
-        tables=tables,
-        ast_text="\n".join(_ast_dump(module)),
-        symbols=symbols,
-        hir_raw=hir_raw_lines,
-        hir_opt=hir_opt_lines,
-        cfg=cfg_dump,
-        asm=asm,
+        artifacts=artifacts,
         timeline=timeline,
         run_value=run_value,
         run_stdout=run_stdout,
         vm_trace=vm_trace,
-        llvm_ir=llvm_ir,
     )
 
 

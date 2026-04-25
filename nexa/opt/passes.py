@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from nexa.ir.hir import HIRFunction, HIRInstr, HIRModule
+from nexa.ir.hir import HIRFunction, HIRInstr, HIRKind, HIRModule
 
 
 def const_fold(fn: HIRFunction) -> None:
     values: dict[str, int] = {}
     out: list[HIRInstr] = []
     for ins in fn.instrs:
-        if ins.op == "const.i32" and ins.dst and ins.src1 is not None:
-            values[ins.dst] = int(ins.src1)
+        if ins.kind == HIRKind.CONST and ins.ty == "i32" and ins.dst and ins.args:
+            values[ins.dst] = int(ins.args[0])
             out.append(ins)
-        elif ins.op.startswith("bin.") and ins.dst and ins.src1 in values and ins.src2 in values:
-            a, b = values[ins.src1], values[ins.src2]
-            op = ins.op[4:]
+        elif ins.kind == HIRKind.BIN and ins.dst and len(ins.args) == 2 and ins.args[0] in values and ins.args[1] in values:
+            a, b = values[ins.args[0]], values[ins.args[1]]
+            op = ins.op or ""
             if op == "+":
                 c = a + b
             elif op == "-":
@@ -24,7 +24,7 @@ def const_fold(fn: HIRFunction) -> None:
             else:
                 out.append(ins); continue
             values[ins.dst] = c
-            out.append(HIRInstr("const.i32", ins.dst, str(c), None, "i32"))
+            out.append(HIRInstr(HIRKind.CONST, dst=ins.dst, args=[str(c)], ty="i32"))
         else:
             out.append(ins)
     fn.instrs = out
@@ -33,11 +33,10 @@ def const_fold(fn: HIRFunction) -> None:
 def dce(fn: HIRFunction) -> None:
     used: set[str] = set()
     for ins in fn.instrs:
-        if ins.src1 and ins.src1.startswith("t"):
-            used.add(ins.src1)
-        if ins.src2 and ins.src2.startswith("t"):
-            used.add(ins.src2)
-    fn.instrs = [i for i in fn.instrs if not (i.dst and i.dst.startswith("t") and i.dst not in used and i.op.startswith("const."))]
+        for a in ins.args:
+            if a.startswith("t"):
+                used.add(a)
+    fn.instrs = [i for i in fn.instrs if not (i.dst and i.dst.startswith("t") and i.dst not in used and i.kind == HIRKind.CONST)]
 
 
 def run_optimizations(mod: HIRModule) -> HIRModule:

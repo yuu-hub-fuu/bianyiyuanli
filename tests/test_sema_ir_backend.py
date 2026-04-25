@@ -27,10 +27,10 @@ fn main() -> i32 {
 def test_compile_pipeline_tables_and_cfg():
     res = compile_source(PROGRAM, mode='full')
     assert all(d.level != 'error' for d in res.diagnostics)
-    assert res.tables['keywords']
-    assert res.tables['symbols']
-    assert any('br.true' in ln for ln in res.hir_opt)
-    assert 'main' in res.cfg
+    assert res.artifacts.tables['keywords']
+    assert res.artifacts.tables['symbols']
+    assert any('BR_TRUE' in ln for ln in res.artifacts.tables['hir_opt'])
+    assert 'main' in res.artifacts.cfg
 
 
 def test_if_while_nested_scope_type_error_fixit():

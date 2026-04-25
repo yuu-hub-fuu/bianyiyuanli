@@ -32,17 +32,10 @@ def emit_function(fn: MIRFunction, alloc: dict[str, str | None]) -> str:
                 param_idx += 1
             elif ins.op == "arg" and ins.args:
                 arg_buf.append(ins.args[0])
-            elif ins.op in {"call", "call.recv", "call.send", "call.select_recv"}:
+            elif ins.op == "call":
                 callee = ins.args[0] if ins.args else ""
-                if ins.op == "call.recv":
-                    callee = "rt_chan_recv"
-                    arg_buf = [ins.args[0]] if ins.args else []
-                elif ins.op == "call.send":
-                    callee = "rt_chan_send"
-                    arg_buf = [ins.args[0], ins.args[1]] if len(ins.args) > 1 else arg_buf
-                elif ins.op == "call.select_recv":
-                    callee = "rt_select_recv"
-                    arg_buf = [ins.args[0], ins.args[1]] if len(ins.args) > 1 else arg_buf
+                if callee in {"recv", "send", "select_recv"}:
+                    arg_buf = ins.args[1:]
                 for idx, a in enumerate(arg_buf):
                     if idx < len(ARG_REGS):
                         lines.append(f"  mov {ARG_REGS[idx]}, {_loc(a, alloc, slots)}")
@@ -91,14 +84,14 @@ def emit_function(fn: MIRFunction, alloc: dict[str, str | None]) -> str:
                 if ins.args:
                     lines.append(f"  mov rax, {_loc(ins.args[0], alloc, slots)}")
                 lines.extend(["  leave", "  ret"])
-            elif ins.op == "jmp" and ins.dst:
-                lines.append(f"  jmp {ins.dst}")
-            elif ins.op == "br.true" and ins.dst and ins.args:
+            elif ins.op == "jmp" and ins.args:
+                lines.append(f"  jmp {ins.args[-1]}")
+            elif ins.op == "br.true" and len(ins.args) >= 2:
                 lines.append(f"  cmp {_loc(ins.args[0], alloc, slots)}, 0")
-                lines.append(f"  jne {ins.dst}")
-            elif ins.op == "br.ready" and ins.dst and ins.args:
+                lines.append(f"  jne {ins.args[-1]}")
+            elif ins.op == "br.ready" and len(ins.args) >= 2:
                 lines.append(f"  mov rdi, {_loc(ins.args[0], alloc, slots)}")
                 lines.append("  call rt_chan_ready")
                 lines.append("  cmp rax, 0")
-                lines.append(f"  jne {ins.dst}")
+                lines.append(f"  jne {ins.args[-1]}")
     return "\n".join(lines) + "\n"

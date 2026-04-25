@@ -30,7 +30,7 @@ class NexaStudio(tk.Tk):
 
         right = ttk.Notebook(top)
         self.views: dict[str, tk.Text] = {}
-        for name in ["Token", "AST", "Symbol", "HIR", "HIR-Diff", "CFG", "ASM", "Timeline"]:
+        for name in ["Token", "AST", "Symbol Tree", "HIR Table", "Diagnostics Groups", "CFG", "ASM", "Timeline", "Run Output", "Trace Panel"]:
             frame = ttk.Frame(right)
             txt = tk.Text(frame, wrap="none", font=("Consolas", 11))
             txt.pack(fill=tk.BOTH, expand=True)
@@ -51,32 +51,35 @@ class NexaStudio(tk.Tk):
 
     def compile_now(self) -> None:
         src = self.editor.get("1.0", tk.END)
-        res = compile_source(src, mode="full", export_dir="out")
+        res = compile_source(src, mode="full", export_dir="out", run=True, trace=True)
         self.last_result = res
-        self._set("Token", "\n".join(res.tokens))
-        self._set("AST", res.ast_text)
+        self._set("Token", "\n".join(res.artifacts.tokens))
+        self._set("AST", res.artifacts.ast_text)
         # Symbol tree view (global -> scope)
         symbol_tree = ["global"]
-        for row in res.symbols:
+        for row in res.artifacts.symbols:
             symbol_tree.append("  ├─ " + row)
-        self._set("Symbol", "\n".join(symbol_tree))
+        self._set("Symbol Tree", "\n".join(symbol_tree))
 
-        self._set("HIR", "=== raw ===\n" + "\n".join(res.hir_raw) + "\n\n=== opt ===\n" + "\n".join(res.hir_opt))
-        raw_set = set(res.hir_raw)
-        opt_set = set(res.hir_opt)
-        diff_rows = ["--- Removed by optimization ---"]
-        diff_rows.extend(["- " + x for x in res.hir_raw if x not in opt_set])
-        diff_rows.append("\n+++ Added/Changed after optimization +++")
-        diff_rows.extend(["+ " + x for x in res.hir_opt if x not in raw_set])
-        self._set("HIR-Diff", "\n".join(diff_rows))
+        self._set("HIR Table", "\n".join(res.artifacts.tables.get("hir_opt", [])))
+        grouped: dict[str, list[str]] = {}
+        for d in res.diagnostics:
+            grouped.setdefault(d.level, []).append(d.message)
+        diag_groups = []
+        for lv, msgs in grouped.items():
+            diag_groups.append(f"[{lv}]")
+            diag_groups.extend(f"  - {m}" for m in msgs)
+        self._set("Diagnostics Groups", "\n".join(diag_groups))
         cfg = []
-        for fn, rows in res.cfg.items():
+        for fn, rows in res.artifacts.cfg.items():
             cfg.append(f"-- {fn} --\n" + "\n".join(rows))
         self._set("CFG", "\n\n".join(cfg))
-        self._set("ASM", "\n\n".join(f"-- {k} --\n{v}" for k, v in res.asm.items()))
+        self._set("ASM", "\n\n".join(f"-- {k} --\n{v}" for k, v in res.artifacts.asm.items()))
         dashboard = ["编译流水线仪表盘"]
-        dashboard.extend(("✅" if s.ok else "❌") + f" {s.name:<12} {s.detail}" for s in res.timeline)
+        dashboard.extend(f"{s.status:<8} {s.name:<12} {s.detail}" for s in res.timeline)
         self._set("Timeline", "\n".join(dashboard))
+        self._set("Run Output", "\n".join(res.run_stdout + ([f"exit={res.run_value}"] if res.run_value is not None else [])))
+        self._set("Trace Panel", "\n".join(f"{i+1:04d} {f.fn}@{f.ip} {f.instr}" for i, f in enumerate(res.vm_trace)))
 
         self.diag.delete("1.0", tk.END)
         if not res.diagnostics:

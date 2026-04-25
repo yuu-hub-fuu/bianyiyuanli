@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from nexa.ir.hir import HIRFunction, HIRModule
+from nexa.ir.hir import HIRKind, HIRModule
 from nexa.runtime import rt_core
 
 
@@ -57,21 +57,21 @@ class HIRVM:
         labels: dict[str, int] = {}
         pending_args: list[object] = []
 
-        param_names = [i.dst for i in fn.instrs if i.op == "param" and i.dst]
+        param_names = [i.dst for i in fn.instrs if i.kind == HIRKind.PARAM and i.dst]
         for idx, p in enumerate(param_names):
             env[p] = args[idx] if idx < len(args) else 0
 
         for idx, ins in enumerate(fn.instrs):
-            if ins.op == "label" and ins.dst:
-                labels[ins.dst] = idx
+            if ins.kind == HIRKind.LABEL and ins.target:
+                labels[ins.target] = idx
 
         ip = 0
         steps = 0
         while ip < len(fn.instrs):
             ins = fn.instrs[ip]
-            op = ins.op
+            op = ins.kind
             if trace is not None:
-                trace.append(VMFrame(name, ip, ins.op, dict(env), list(self.output)))
+                trace.append(VMFrame(name, ip, ins.kind.name, dict(env), list(self.output)))
             steps += 1
             if steps > max_steps:
                 raise RuntimeError("VM: step limit exceeded")
@@ -86,18 +86,18 @@ class HIRVM:
                 except Exception:
                     return x
 
-            if op == "param":
+            if op == HIRKind.PARAM:
                 ip += 1; continue
-            if op.startswith("const.") and ins.dst:
-                env[ins.dst] = val(ins.src1)
-            elif op.startswith("mov.") and ins.dst:
-                env[ins.dst] = val(ins.src1)
-            elif op.startswith("unary.") and ins.dst:
-                r = int(val(ins.src1))
-                env[ins.dst] = -r if op.endswith("-") else (0 if r else 1)
-            elif op.startswith("bin.") and ins.dst:
-                a, b = val(ins.src1), val(ins.src2)
-                sym = op[4:]
+            if op == HIRKind.CONST and ins.dst and ins.args:
+                env[ins.dst] = val(ins.args[0])
+            elif op == HIRKind.MOVE and ins.dst and ins.args:
+                env[ins.dst] = val(ins.args[0])
+            elif op == HIRKind.UNARY and ins.dst and ins.args:
+                r = int(val(ins.args[0]))
+                env[ins.dst] = -r if ins.op == "-" else (0 if r else 1)
+            elif op == HIRKind.BIN and ins.dst and len(ins.args) == 2:
+                a, b = val(ins.args[0]), val(ins.args[1])
+                sym = ins.op or "+"
                 if sym == "+": env[ins.dst] = int(a) + int(b)
                 elif sym == "-": env[ins.dst] = int(a) - int(b)
                 elif sym == "*": env[ins.dst] = int(a) * int(b)
@@ -111,33 +111,30 @@ class HIRVM:
                 elif sym == ">=": env[ins.dst] = int(int(a) >= int(b))
                 elif sym == "&&": env[ins.dst] = int(bool(a) and bool(b))
                 elif sym == "||": env[ins.dst] = int(bool(a) or bool(b))
-            elif op == "arg" and ins.src1:
-                pending_args.append(val(ins.src1))
-            elif op == "call" and ins.src1:
-                ret = self._call(ins.src1, pending_args, trace, max_steps)
+            elif op == HIRKind.ARG and ins.args:
+                pending_args.append(val(ins.args[0]))
+            elif op == HIRKind.CALL and ins.op:
+                call_args = pending_args
+                if ins.op in {"recv", "send", "select_recv"} and (len(ins.args) > 1 or not ins.args or not ins.args[0].isdigit()):
+                    call_args = [val(a) for a in ins.args]
+                ret = self._call(ins.op, call_args, trace, max_steps)
                 pending_args = []
                 if ins.dst:
                     env[ins.dst] = ret
-            elif op == "call.recv" and ins.dst:
-                env[ins.dst] = self._call("recv", [val(ins.src1)], trace, max_steps)
-            elif op == "call.send":
-                self._call("send", [val(ins.src1), val(ins.src2)], trace, max_steps)
-            elif op == "call.select_recv" and ins.dst:
-                env[ins.dst] = self._call("select_recv", [val(ins.src1), val(ins.src2)], trace, max_steps)
-            elif op == "br.true" and ins.dst:
-                if int(val(ins.src1)) != 0:
-                    ip = labels[ins.dst]
+            elif op == HIRKind.BR_TRUE and ins.target and ins.args:
+                if int(val(ins.args[0])) != 0:
+                    ip = labels[ins.target]
                     continue
-            elif op == "br.ready" and ins.dst:
-                ch = val(ins.src1)
+            elif op == HIRKind.BR_READY and ins.target and ins.args:
+                ch = val(ins.args[0])
                 if hasattr(ch, "q") and not ch.q.empty():
-                    ip = labels[ins.dst]
+                    ip = labels[ins.target]
                     continue
-            elif op == "jmp" and ins.dst:
-                ip = labels[ins.dst]
+            elif op == HIRKind.JUMP and ins.target:
+                ip = labels[ins.target]
                 continue
-            elif op == "ret":
-                return val(ins.src1)
+            elif op == HIRKind.RET:
+                return val(ins.args[0] if ins.args else None)
             ip += 1
         return 0
 

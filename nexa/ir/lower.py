@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from nexa.frontend import ast
-from .hir import HIRFunction, HIRInstr, HIRModule
+from .hir import HIRFunction, HIRInstr, HIRKind, HIRModule
 from .mir import BasicBlock, MIRFunction, MIRInstr, MIRModule
 
 
@@ -23,11 +23,11 @@ class Lowerer:
     def _lower_fn(self, fn: ast.Function) -> HIRFunction:
         hf = HIRFunction(fn.name)
         for p in fn.params:
-            hf.instrs.append(HIRInstr("param", p.name, None, None, p.type_ref.name))
+            hf.instrs.append(HIRInstr(HIRKind.PARAM, dst=p.name, ty=p.type_ref.name))
         for st in fn.body.stmts:
             self._lower_stmt(st, hf)
-        if not hf.instrs or hf.instrs[-1].op != "ret":
-            hf.instrs.append(HIRInstr("ret", None, "0", None, "i32"))
+        if not hf.instrs or hf.instrs[-1].kind != HIRKind.RET:
+            hf.instrs.append(HIRInstr(HIRKind.RET, args=["0"], ty="i32"))
         return hf
 
     def _lower_stmt(self, st: ast.Stmt, hf: HIRFunction) -> None:
@@ -35,51 +35,51 @@ class Lowerer:
             if st.value:
                 src = self._lower_expr(st.value, hf)
                 ty = st.type_ref.name if st.type_ref else (st.value.inferred_type or "i32")
-                hf.instrs.append(HIRInstr(f"mov.{ty}", st.name, src, None, ty))
+                hf.instrs.append(HIRInstr(HIRKind.MOVE, dst=st.name, args=[src], ty=ty))
         elif isinstance(st, ast.AssignStmt):
             src = self._lower_expr(st.value, hf)
             ty = st.value.inferred_type or "i32"
-            hf.instrs.append(HIRInstr(f"mov.{ty}", st.target.name, src, None, ty))
+            hf.instrs.append(HIRInstr(HIRKind.MOVE, dst=st.target.name, args=[src], ty=ty))
         elif isinstance(st, ast.ExprStmt):
             self._lower_expr(st.expr, hf)
         elif isinstance(st, ast.ReturnStmt):
             if st.value:
                 src = self._lower_expr(st.value, hf)
-                hf.instrs.append(HIRInstr("ret", None, src, None, st.value.inferred_type or "i32"))
+                hf.instrs.append(HIRInstr(HIRKind.RET, args=[src], ty=st.value.inferred_type or "i32"))
             else:
-                hf.instrs.append(HIRInstr("ret", None, None, None, "void"))
+                hf.instrs.append(HIRInstr(HIRKind.RET, ty="void"))
         elif isinstance(st, ast.IfStmt):
             c = self._lower_expr(st.cond, hf)
             l_then, l_else, l_end = self._tmp(), self._tmp(), self._tmp()
-            hf.instrs.append(HIRInstr("br.true", l_then, c, None, "bool"))
-            hf.instrs.append(HIRInstr("jmp", l_else, None, None, "void"))
-            hf.instrs.append(HIRInstr("label", l_then, None, None, "void"))
+            hf.instrs.append(HIRInstr(HIRKind.BR_TRUE, args=[c], target=l_then, ty="bool"))
+            hf.instrs.append(HIRInstr(HIRKind.JUMP, target=l_else, ty="void"))
+            hf.instrs.append(HIRInstr(HIRKind.LABEL, target=l_then, ty="void"))
             for s in st.then_block.stmts:
                 self._lower_stmt(s, hf)
-            hf.instrs.append(HIRInstr("jmp", l_end, None, None, "void"))
-            hf.instrs.append(HIRInstr("label", l_else, None, None, "void"))
+            hf.instrs.append(HIRInstr(HIRKind.JUMP, target=l_end, ty="void"))
+            hf.instrs.append(HIRInstr(HIRKind.LABEL, target=l_else, ty="void"))
             if st.else_block:
                 for s in st.else_block.stmts:
                     self._lower_stmt(s, hf)
-            hf.instrs.append(HIRInstr("jmp", l_end, None, None, "void"))
-            hf.instrs.append(HIRInstr("label", l_end, None, None, "void"))
+            hf.instrs.append(HIRInstr(HIRKind.JUMP, target=l_end, ty="void"))
+            hf.instrs.append(HIRInstr(HIRKind.LABEL, target=l_end, ty="void"))
         elif isinstance(st, ast.WhileStmt):
             l_head, l_body, l_end = self._tmp(), self._tmp(), self._tmp()
-            hf.instrs.append(HIRInstr("label", l_head, None, None, "void"))
+            hf.instrs.append(HIRInstr(HIRKind.LABEL, target=l_head, ty="void"))
             c = self._lower_expr(st.cond, hf)
-            hf.instrs.append(HIRInstr("br.true", l_body, c, None, "bool"))
-            hf.instrs.append(HIRInstr("jmp", l_end, None, None, "void"))
-            hf.instrs.append(HIRInstr("label", l_body, None, None, "void"))
+            hf.instrs.append(HIRInstr(HIRKind.BR_TRUE, args=[c], target=l_body, ty="bool"))
+            hf.instrs.append(HIRInstr(HIRKind.JUMP, target=l_end, ty="void"))
+            hf.instrs.append(HIRInstr(HIRKind.LABEL, target=l_body, ty="void"))
             for s in st.body.stmts:
                 self._lower_stmt(s, hf)
-            hf.instrs.append(HIRInstr("jmp", l_head, None, None, "void"))
-            hf.instrs.append(HIRInstr("label", l_end, None, None, "void"))
+            hf.instrs.append(HIRInstr(HIRKind.JUMP, target=l_head, ty="void"))
+            hf.instrs.append(HIRInstr(HIRKind.LABEL, target=l_end, ty="void"))
         elif isinstance(st, ast.Block):
             for s in st.stmts:
                 self._lower_stmt(s, hf)
         elif isinstance(st, ast.SpawnStmt):
             fn = self._lower_expr(st.expr, hf)
-            hf.instrs.append(HIRInstr("spawn", None, fn, None, "void"))
+            hf.instrs.append(HIRInstr(HIRKind.SPAWN, args=[fn], ty="void"))
 
     def _lower_block_value(self, block: ast.Block, hf: HIRFunction, fallback: str) -> str:
         if not block.stmts:
@@ -113,67 +113,67 @@ class Lowerer:
         l_recv, l_default, l_end = self._tmp(), self._tmp(), self._tmp()
         if recv_case and recv_case.channel:
             ch = self._lower_expr(recv_case.channel, hf)
-            hf.instrs.append(HIRInstr("br.ready", l_recv, ch, None, "bool", (ex.span.line, ex.span.col)))
-        hf.instrs.append(HIRInstr("jmp", l_default, None, None, "void", (ex.span.line, ex.span.col)))
+            hf.instrs.append(HIRInstr(HIRKind.BR_READY, args=[ch], target=l_recv, ty="bool", span=(ex.span.line, ex.span.col)))
+        hf.instrs.append(HIRInstr(HIRKind.JUMP, target=l_default, ty="void", span=(ex.span.line, ex.span.col)))
 
-        hf.instrs.append(HIRInstr("label", l_recv, None, None, "void", (ex.span.line, ex.span.col)))
+        hf.instrs.append(HIRInstr(HIRKind.LABEL, target=l_recv, ty="void", span=(ex.span.line, ex.span.col)))
         recv_val = self._tmp()
         if recv_case and recv_case.channel:
             ch = self._lower_expr(recv_case.channel, hf)
-            hf.instrs.append(HIRInstr("call.recv", recv_val, ch, "1", ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+            hf.instrs.append(HIRInstr(HIRKind.CALL, dst=recv_val, args=[ch], op="recv", ty=ex.inferred_type or "i32", span=(ex.span.line, ex.span.col)))
         else:
-            hf.instrs.append(HIRInstr("const.i32", recv_val, "0", None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+            hf.instrs.append(HIRInstr(HIRKind.CONST, dst=recv_val, args=["0"], ty=ex.inferred_type or "i32", span=(ex.span.line, ex.span.col)))
         recv_out = self._lower_block_value(recv_case.body, hf, recv_val) if recv_case else recv_val
-        hf.instrs.append(HIRInstr("mov.i32", res, recv_out, None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
-        hf.instrs.append(HIRInstr("jmp", l_end, None, None, "void", (ex.span.line, ex.span.col)))
+        hf.instrs.append(HIRInstr(HIRKind.MOVE, dst=res, args=[recv_out], ty=ex.inferred_type or "i32", span=(ex.span.line, ex.span.col)))
+        hf.instrs.append(HIRInstr(HIRKind.JUMP, target=l_end, ty="void", span=(ex.span.line, ex.span.col)))
 
-        hf.instrs.append(HIRInstr("label", l_default, None, None, "void", (ex.span.line, ex.span.col)))
+        hf.instrs.append(HIRInstr(HIRKind.LABEL, target=l_default, ty="void", span=(ex.span.line, ex.span.col)))
         default_val = self._tmp()
-        hf.instrs.append(HIRInstr("const.i32", default_val, "0", None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+        hf.instrs.append(HIRInstr(HIRKind.CONST, dst=default_val, args=["0"], ty=ex.inferred_type or "i32", span=(ex.span.line, ex.span.col)))
         if default_case:
             d_out = self._lower_block_value(default_case.body, hf, default_val)
-            hf.instrs.append(HIRInstr("mov.i32", res, d_out, None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+            hf.instrs.append(HIRInstr(HIRKind.MOVE, dst=res, args=[d_out], ty=ex.inferred_type or "i32", span=(ex.span.line, ex.span.col)))
         else:
-            hf.instrs.append(HIRInstr("mov.i32", res, default_val, None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+            hf.instrs.append(HIRInstr(HIRKind.MOVE, dst=res, args=[default_val], ty=ex.inferred_type or "i32", span=(ex.span.line, ex.span.col)))
 
-        hf.instrs.append(HIRInstr("label", l_end, None, None, "void", (ex.span.line, ex.span.col)))
+        hf.instrs.append(HIRInstr(HIRKind.LABEL, target=l_end, ty="void", span=(ex.span.line, ex.span.col)))
 
         for c in ex.cases:
             if c.kind == "send" and c.channel and c.value:
                 ch = self._lower_expr(c.channel, hf)
                 v = self._lower_expr(c.value, hf)
-                hf.instrs.append(HIRInstr("call.send", None, ch, v, "void", (ex.span.line, ex.span.col)))
+                hf.instrs.append(HIRInstr(HIRKind.CALL, args=[ch, v], op="send", ty="void", span=(ex.span.line, ex.span.col)))
         return res
 
     def _lower_expr(self, ex: ast.Expr, hf: HIRFunction) -> str:
         if isinstance(ex, ast.IntLit):
-            t = self._tmp(); hf.instrs.append(HIRInstr("const.i32", t, str(ex.value), None, "i32", (ex.span.line, ex.span.col))); return t
+            t = self._tmp(); hf.instrs.append(HIRInstr(HIRKind.CONST, dst=t, args=[str(ex.value)], ty="i32", span=(ex.span.line, ex.span.col))); return t
         if isinstance(ex, ast.BoolLit):
-            t = self._tmp(); hf.instrs.append(HIRInstr("const.bool", t, "1" if ex.value else "0", None, "bool", (ex.span.line, ex.span.col))); return t
+            t = self._tmp(); hf.instrs.append(HIRInstr(HIRKind.CONST, dst=t, args=["1" if ex.value else "0"], ty="bool", span=(ex.span.line, ex.span.col))); return t
         if isinstance(ex, ast.StrLit):
-            t = self._tmp(); hf.instrs.append(HIRInstr("const.str", t, ex.value, None, "str", (ex.span.line, ex.span.col))); return t
+            t = self._tmp(); hf.instrs.append(HIRInstr(HIRKind.CONST, dst=t, args=[ex.value], ty="str", span=(ex.span.line, ex.span.col))); return t
         if isinstance(ex, ast.NameExpr):
             return ex.name
         if isinstance(ex, ast.BlockExpr) and ex.block:
             t = self._tmp()
-            zero = self._tmp(); hf.instrs.append(HIRInstr("const.i32", zero, "0", None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+            zero = self._tmp(); hf.instrs.append(HIRInstr(HIRKind.CONST, dst=zero, args=["0"], ty=ex.inferred_type or "i32", span=(ex.span.line, ex.span.col)))
             out = self._lower_block_value(ex.block, hf, zero)
-            hf.instrs.append(HIRInstr("mov.i32", t, out, None, ex.inferred_type or "i32", (ex.span.line, ex.span.col)))
+            hf.instrs.append(HIRInstr(HIRKind.MOVE, dst=t, args=[out], ty=ex.inferred_type or "i32", span=(ex.span.line, ex.span.col)))
             return t
         if isinstance(ex, ast.SelectExpr):
             return self._lower_select_expr(ex, hf)
         if isinstance(ex, ast.UnaryExpr) and ex.rhs:
             r = self._lower_expr(ex.rhs, hf)
-            t = self._tmp(); hf.instrs.append(HIRInstr(f"unary.{ex.op}", t, r, None, ex.inferred_type or "i32", (ex.span.line, ex.span.col))); return t
+            t = self._tmp(); hf.instrs.append(HIRInstr(HIRKind.UNARY, dst=t, args=[r], op=ex.op, ty=ex.inferred_type or "i32", span=(ex.span.line, ex.span.col))); return t
         if isinstance(ex, ast.BinaryExpr) and ex.lhs and ex.rhs:
             l = self._lower_expr(ex.lhs, hf); r = self._lower_expr(ex.rhs, hf)
-            t = self._tmp(); hf.instrs.append(HIRInstr(f"bin.{ex.op}", t, l, r, ex.inferred_type or "i32", (ex.span.line, ex.span.col))); return t
+            t = self._tmp(); hf.instrs.append(HIRInstr(HIRKind.BIN, dst=t, args=[l, r], op=ex.op, ty=ex.inferred_type or "i32", span=(ex.span.line, ex.span.col))); return t
         if isinstance(ex, ast.CallExpr) and isinstance(ex.callee, ast.NameExpr):
             args = [self._lower_expr(a, hf) for a in ex.args]
             for a in args:
-                hf.instrs.append(HIRInstr("arg", None, a, None, "void"))
-            t = self._tmp(); hf.instrs.append(HIRInstr("call", t, ex.callee.name, str(len(args)), ex.inferred_type or "i32", (ex.span.line, ex.span.col))); return t
-        t = self._tmp(); hf.instrs.append(HIRInstr("const.i32", t, "0", None, "i32", (ex.span.line, ex.span.col))); return t
+                hf.instrs.append(HIRInstr(HIRKind.ARG, args=[a], ty="void"))
+            t = self._tmp(); hf.instrs.append(HIRInstr(HIRKind.CALL, dst=t, op=ex.callee.name, args=[str(len(args))], ty=ex.inferred_type or "i32", span=(ex.span.line, ex.span.col))); return t
+        t = self._tmp(); hf.instrs.append(HIRInstr(HIRKind.CONST, dst=t, args=["0"], ty="i32", span=(ex.span.line, ex.span.col))); return t
 
 
 def hir_to_mir(hir: HIRModule) -> MIRModule:
@@ -191,25 +191,44 @@ def hir_to_mir(hir: HIRModule) -> MIRModule:
             return mf.blocks[name]
 
         for h in fn.instrs:
-            if h.op == "label" and h.dst:
-                current = ensure_block(h.dst)
+            if h.kind == HIRKind.LABEL and h.target:
+                current = ensure_block(h.target)
                 continue
 
-            args = [x for x in (h.src1, h.src2) if x is not None]
-            mi = MIRInstr(h.op, args, h.dst)
+            op_map = {
+                HIRKind.PARAM: "param",
+                HIRKind.CONST: f"const.{h.ty}",
+                HIRKind.MOVE: f"mov.{h.ty}",
+                HIRKind.UNARY: f"unary.{h.op or ''}",
+                HIRKind.BIN: f"bin.{h.op or ''}",
+                HIRKind.ARG: "arg",
+                HIRKind.CALL: "call",
+                HIRKind.RET: "ret",
+                HIRKind.JUMP: "jmp",
+                HIRKind.BR_TRUE: "br.true",
+                HIRKind.BR_READY: "br.ready",
+                HIRKind.SPAWN: "spawn",
+            }
+            op = op_map.get(h.kind, h.kind.name.lower())
+            args = list(h.args)
+            if h.kind == HIRKind.CALL and h.op:
+                args = [h.op, *args]
+            if h.target:
+                args = [*args, h.target]
+            mi = MIRInstr(op, args, h.dst)
             current.instrs.append(mi)
 
-            if h.op in {"br.true", "br.ready"} and h.dst:
-                tblock = ensure_block(h.dst)
-                current.succs.add(h.dst); tblock.preds.add(current.label)
+            if h.kind in {HIRKind.BR_TRUE, HIRKind.BR_READY} and h.target:
+                tblock = ensure_block(h.target)
+                current.succs.add(h.target); tblock.preds.add(current.label)
                 fall = ensure_block(f"fall_{len(mf.order)}")
                 current.succs.add(fall.label); fall.preds.add(current.label)
                 current = fall
-            elif h.op == "jmp" and h.dst:
-                tblock = ensure_block(h.dst)
-                current.succs.add(h.dst); tblock.preds.add(current.label)
+            elif h.kind == HIRKind.JUMP and h.target:
+                tblock = ensure_block(h.target)
+                current.succs.add(h.target); tblock.preds.add(current.label)
                 current = ensure_block(f"after_jmp_{len(mf.order)}")
-            elif h.op == "ret":
+            elif h.kind == HIRKind.RET:
                 current = ensure_block(f"after_ret_{len(mf.order)}")
 
         # prune empty synthetic blocks without predecessors

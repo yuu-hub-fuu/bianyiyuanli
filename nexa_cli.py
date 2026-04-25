@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import html
 from pathlib import Path
 
 from nexa.compiler import compile_source
+from nexa.report.html_report import write_html_report
 
 
 def _print_table(title: str, rows: list[str]) -> None:
@@ -13,38 +13,6 @@ def _print_table(title: str, rows: list[str]) -> None:
         print("\n".join(rows))
     else:
         print("(empty)")
-
-
-def _write_html_report(path: Path, res) -> None:
-    def section(title: str, rows: list[str]) -> str:
-        body = "<br/>".join(html.escape(r) for r in rows) if rows else "<i>(empty)</i>"
-        return f"<h2>{html.escape(title)}</h2><div class='box'>{body}</div>"
-
-    timeline = "".join(
-        f"<li>{'✅' if st.ok else '❌'} {html.escape(st.name)} - {html.escape(st.detail)}</li>"
-        for st in res.timeline
-    )
-    diags = "".join(
-        f"<li><b>{html.escape(d.level)}</b> {html.escape(d.message)} @ {d.span.line}:{d.span.col}</li>"
-        for d in res.diagnostics
-    )
-    html_doc = f"""<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"/><title>Nexa Report</title>
-<style>
-body{{font-family:ui-monospace,Consolas,monospace;padding:20px;line-height:1.4}}
-.box{{background:#f7f7f7;border:1px solid #ddd;padding:10px;white-space:pre-wrap}}
-h1,h2{{margin:12px 0 6px}} ul{{margin:6px 0 12px}}
-</style></head><body>
-<h1>Nexa 编译报告</h1>
-<h2>Timeline</h2><ul>{timeline}</ul>
-<h2>Diagnostics</h2><ul>{diags or '<li>none</li>'}</ul>
-{section("Tokens", res.tokens)}
-{section("AST", res.ast_text.splitlines())}
-{section("HIR(raw)", res.hir_raw)}
-{section("HIR(opt)", res.hir_opt)}
-{section("Symbols", res.symbols)}
-</body></html>"""
-    path.write_text(html_doc, encoding="utf-8")
 
 
 def main() -> int:
@@ -64,7 +32,7 @@ def main() -> int:
 
     print("== TIMELINE ==")
     for st in res.timeline:
-        icon = "✅" if st.ok else "❌"
+        icon = {"ok": "✅", "warning": "⚠️", "failed": "❌", "skipped": "⏭️"}.get(st.status, "❔")
         print(f"{icon} {st.name:<12} {st.detail}")
 
     for d in res.diagnostics:
@@ -90,40 +58,41 @@ def main() -> int:
         if args.mode != "core":
             print("[warning] LLVM backend only supports core integer subset")
         print("== LLVM IR ==")
-        print(res.llvm_ir)
+        print(res.artifacts.llvm_ir)
 
     if args.dump in {"tokens", "all"}:
-        _print_table("TOKENS", res.tokens)
+        _print_table("TOKENS", res.artifacts.tokens)
 
     if args.dump in {"tables", "all"}:
-        _print_table("关键字表", res.tables["keywords"])
-        _print_table("界符表", res.tables["delimiters"])
-        _print_table("标识符表", res.tables["identifiers"])
-        _print_table("常量表", res.tables["constants"])
-        _print_table("符号表", res.symbols)
-        _print_table("四元式表", res.hir_opt)
+        _print_table("关键字表", res.artifacts.tables.get("keywords", []))
+        _print_table("界符表", res.artifacts.tables.get("delimiters", []))
+        _print_table("标识符表", res.artifacts.tables.get("identifiers", []))
+        _print_table("常量表", res.artifacts.tables.get("constants", []))
+        _print_table("符号表", res.artifacts.symbols)
+        _print_table("四元式表", res.artifacts.tables.get("quadruples", []))
 
     if args.dump in {"ast", "all"}:
-        _print_table("AST", res.ast_text.splitlines())
+        _print_table("AST", res.artifacts.ast_text.splitlines())
 
     if args.dump in {"hir", "all"}:
-        _print_table("HIR(原始)", res.hir_raw)
-        _print_table("HIR(优化后)", res.hir_opt)
+        from nexa.compiler import _hir_lines
+        _print_table("HIR(原始)", _hir_lines(res.artifacts.hir_raw))
+        _print_table("HIR(优化后)", _hir_lines(res.artifacts.hir_opt))
 
     if args.dump in {"cfg", "all"}:
         print("== CFG ==")
-        for fn, rows in res.cfg.items():
+        for fn, rows in res.artifacts.cfg.items():
             print(f"-- {fn} --")
             print("\n".join(rows))
 
     if args.dump in {"asm", "all"}:
         print("== ASM ==")
-        for fn, text in res.asm.items():
+        for fn, text in res.artifacts.asm.items():
             print(f"-- {fn} --")
             print(text)
 
     if args.report is not None:
-        _write_html_report(args.report, res)
+        write_html_report(args.report, res)
         print(f"[report] wrote {args.report}")
 
     return 1 if any(d.level == "error" for d in res.diagnostics) else 0

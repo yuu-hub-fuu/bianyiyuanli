@@ -1,5 +1,5 @@
 from nexa.compiler import compile_source
-from nexa_cli import _write_html_report
+from nexa.report.html_report import write_html_report
 
 
 def test_select_default_nonblocking_with_vm_run_and_default_body_effect():
@@ -56,7 +56,7 @@ fn main() -> i32 { let x: i32 = same(1, true); return x; }
 def test_cfg_has_true_and_false_paths():
     src = 'fn main() -> i32 { let a: i32 = 1; if a > 0 { a = a + 1; } else { a = a + 2; } return a; }'
     res = compile_source(src, mode='core')
-    rows = '\n'.join(res.cfg['main'])
+    rows = '\n'.join(res.artifacts.cfg['main'])
     assert 'succs=' in rows
     assert 'br.true' in rows
 
@@ -65,8 +65,9 @@ def test_parser_recovery_continues_after_missing_semi():
     src = 'fn main() -> i32 { let a: i32 = 1 let b: i32 = 2; return b; }'
     res = compile_source(src, mode='core')
     assert any('缺少分号' in d.message for d in res.diagnostics)
-    # still lowers second declaration/return
-    assert any('mov.i32' in line for line in res.hir_opt)
+    status = {s.name: s.status for s in res.timeline}
+    assert status['Parser'] == 'failed'
+    assert status['HIR'] == 'skipped'
 
 
 def test_runtime_errors_are_reported_not_crash():
@@ -81,14 +82,48 @@ def test_vm_trace_available_when_enabled():
     res = compile_source(src, mode='core', run=True, trace=True)
     assert res.run_value == 3
     assert len(res.vm_trace) > 0
-    assert any(fr.instr.startswith('ret') for fr in res.vm_trace)
+    assert any(fr.instr == 'RET' for fr in res.vm_trace)
 
 
 def test_html_report_writer(tmp_path):
     src = 'fn main() -> i32 { return 0; }'
     res = compile_source(src, mode='core')
     out = tmp_path / 'report.html'
-    _write_html_report(out, res)
+    write_html_report(out, res)
     txt = out.read_text(encoding='utf-8')
     assert 'Nexa 编译报告' in txt
     assert 'Timeline' in txt
+
+
+def test_stage_skipping_after_sema_failure():
+    src = 'fn main() -> i32 { return bad; }'
+    res = compile_source(src, mode='core')
+    status = {s.name: s.status for s in res.timeline}
+    assert status['Sema'] == 'failed'
+    assert status['HIR'] == 'skipped'
+    assert status['MIR'] == 'skipped'
+    assert status['Backend'] == 'skipped'
+    assert res.artifacts.hir_opt is None
+
+
+def test_typed_hir_kind_driven():
+    src = 'fn main() -> i32 { let a: i32 = 1 + 2; return a; }'
+    res = compile_source(src, mode='core')
+    assert res.artifacts.hir_opt is not None
+    kinds = {i.kind.name for i in res.artifacts.hir_opt.functions[0].instrs}
+    assert 'CONST' in kinds
+    assert 'MOVE' in kinds
+
+
+def test_llvm_rejects_if_program():
+    src = 'fn main() -> i32 { let a: i32 = 1; if a > 0 { a = 2; } return a; }'
+    res = compile_source(src, mode='core')
+    assert any('LLVM backend rejects control-flow instruction' in d.message for d in res.diagnostics)
+
+
+def test_artifacts_always_present_for_gui():
+    src = 'fn main() -> i32 { let a: i32 = ; return 0; }'
+    res = compile_source(src, mode='core')
+    assert isinstance(res.artifacts.tokens, list)
+    assert isinstance(res.artifacts.tables, dict)
+    assert isinstance(res.artifacts.cfg, dict)

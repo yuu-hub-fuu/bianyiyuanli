@@ -5,7 +5,7 @@
 ```bash
 python -m pip install pytest
 python nexa_cli.py example.nx --mode core --dump tables --run
-python nexa_cli.py example.nx --mode full --dump all --export-dir out --emit-llvm
+python nexa_cli.py example.nx --mode full --dump all --run --trace --report out/report.html
 pytest -q
 ```
 
@@ -16,12 +16,12 @@ pytest -q
 - Macro ⚠️ AST-level macro expansion with depth limit + teaching gensym
 - Generic ⚠️ monomorph demo（调用点实例化）
 - Select ⚠️ runtime subset（`select_recv + default`）
-- LLVM ⚠️ core integer subset
+- LLVM ⚠️ 仅支持线性整数子集（不支持 `if/while/select/chan/str` 的 HIR 控制流）
 - x86-64 ⚠️ teaching text emitter（可读目标代码）
 
 ## 验收输出（CLI）
 
-`--dump tables` 或 `--dump all` 明确输出：
+`--dump tables` 或 `--dump all` 输出：
 
 - 关键字表
 - 界符表
@@ -39,13 +39,15 @@ pytest -q
 
 `--run` 会使用 `nexa.vm.HIRVM` 执行 HIR，保证课程演示“可运行闭环”。
 
+`--trace` 可打印 VM 指令级 trace；`--report out/report.html` 可生成 HTML 编译报告。
+
 ## 图形界面
 
 ```bash
 python -m nexa.ide.app
 ```
 
-界面包含：源码区、Token/AST/Symbol/HIR/CFG/ASM/Timeline 多 Tab、诊断区。
+界面包含：源码区、HIR Table、Symbol Tree、Diagnostics Groups、Run Output、Trace Panel、CFG/ASM/Timeline。
 
 ## 可视化导出
 
