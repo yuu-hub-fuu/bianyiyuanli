@@ -15,7 +15,7 @@ pytest -q
 - Struct ✅
 - Macro ⚠️ AST-level macro expansion with depth limit + teaching gensym
 - Generic ⚠️ monomorph demo（调用点实例化）
-- Select ⚠️ runtime subset（`select_recv + default`）
+- Select ⚠️ lowering 为 `br.ready + recv + default` 的非阻塞子集（仅教学运行时路径）
 - LLVM ⚠️ 仅支持线性整数子集（不支持 `if/while/select/chan/str` 的 HIR 控制流）
 - x86-64 ⚠️ teaching text emitter（可读目标代码）
 
@@ -39,7 +39,7 @@ pytest -q
 
 `--run` 会使用 `nexa.vm.HIRVM` 执行 HIR，保证课程演示“可运行闭环”。
 
-`--trace` 可打印 VM 指令级 trace；`--report out/report.html` 可生成 HTML 编译报告。
+`--trace` 可打印 VM 指令级 trace；`--report out/report.html` 可生成课程化 HTML 报告（词法/符号/四元式/CFG/运行结果/诊断，若存在则嵌入 AST/CFG SVG）。
 
 ## 图形界面
 

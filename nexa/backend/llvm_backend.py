@@ -6,8 +6,8 @@ from nexa.ir.hir import HIRKind, HIRModule
 _UNSUPPORTED = {
     HIRKind.LABEL,
     HIRKind.JUMP,
-    HIRKind.BR_TRUE,
-    HIRKind.BR_READY,
+    HIRKind.BRANCH_TRUE,
+    HIRKind.BRANCH_READY,
     HIRKind.SELECT,
 }
 

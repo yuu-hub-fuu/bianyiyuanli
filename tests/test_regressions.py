@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from nexa.compiler import compile_source
 from nexa.report.html_report import write_html_report
 
@@ -58,7 +60,7 @@ def test_cfg_has_true_and_false_paths():
     res = compile_source(src, mode='core')
     rows = '\n'.join(res.artifacts.cfg['main'])
     assert 'succs=' in rows
-    assert 'br.true' in rows
+    assert 'BRANCH_TRUE' in rows
 
 
 def test_parser_recovery_continues_after_missing_semi():
@@ -91,7 +93,7 @@ def test_html_report_writer(tmp_path):
     out = tmp_path / 'report.html'
     write_html_report(out, res)
     txt = out.read_text(encoding='utf-8')
-    assert 'Nexa 编译报告' in txt
+    assert 'Nexa 编译课程报告' in txt
     assert 'Timeline' in txt
 
 
@@ -121,9 +123,32 @@ def test_llvm_rejects_if_program():
     assert any('LLVM backend rejects control-flow instruction' in d.message for d in res.diagnostics)
 
 
+def test_llvm_rejects_while_program():
+    src = 'fn main() -> i32 { let a: i32 = 0; while a < 2 { a = a + 1; } return a; }'
+    res = compile_source(src, mode='core')
+    assert any('LLVM backend rejects control-flow instruction' in d.message for d in res.diagnostics)
+
+
 def test_artifacts_always_present_for_gui():
     src = 'fn main() -> i32 { let a: i32 = ; return 0; }'
     res = compile_source(src, mode='core')
     assert isinstance(res.artifacts.tokens, list)
     assert isinstance(res.artifacts.tables, dict)
     assert isinstance(res.artifacts.cfg, dict)
+
+
+def test_report_contains_symbols_quads_and_run_result(tmp_path):
+    src = 'fn main() -> i32 { let a: i32 = 1 + 2; return a; }'
+    res = compile_source(src, mode='core', run=True, trace=True)
+    out = tmp_path / 'report.html'
+    write_html_report(out, res)
+    text = out.read_text(encoding='utf-8')
+    assert 'Symbol Table' in text
+    assert 'Quadruple Table' in text
+    assert 'VM Run Result' in text
+
+
+def test_asm_backend_uses_kind_dispatch():
+    txt = Path('nexa/backend/asm_x64.py').read_text(encoding='utf-8')
+    assert 'ins.kind ==' in txt
+    assert 'startswith("bin.' not in txt

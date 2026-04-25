@@ -115,17 +115,17 @@ class HIRVM:
                 pending_args.append(val(ins.args[0]))
             elif op == HIRKind.CALL and ins.op:
                 call_args = pending_args
-                if ins.op in {"recv", "send", "select_recv"} and (len(ins.args) > 1 or not ins.args or not ins.args[0].isdigit()):
+                if ins.op in {"recv", "send", "select_recv"} and ins.args:
                     call_args = [val(a) for a in ins.args]
                 ret = self._call(ins.op, call_args, trace, max_steps)
                 pending_args = []
                 if ins.dst:
                     env[ins.dst] = ret
-            elif op == HIRKind.BR_TRUE and ins.target and ins.args:
+            elif op == HIRKind.BRANCH_TRUE and ins.target and ins.args:
                 if int(val(ins.args[0])) != 0:
                     ip = labels[ins.target]
                     continue
-            elif op == HIRKind.BR_READY and ins.target and ins.args:
+            elif op == HIRKind.BRANCH_READY and ins.target and ins.args:
                 ch = val(ins.args[0])
                 if hasattr(ch, "q") and not ch.q.empty():
                     ip = labels[ins.target]

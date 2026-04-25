@@ -51,7 +51,7 @@ class Lowerer:
         elif isinstance(st, ast.IfStmt):
             c = self._lower_expr(st.cond, hf)
             l_then, l_else, l_end = self._tmp(), self._tmp(), self._tmp()
-            hf.instrs.append(HIRInstr(HIRKind.BR_TRUE, args=[c], target=l_then, ty="bool"))
+            hf.instrs.append(HIRInstr(HIRKind.BRANCH_TRUE, args=[c], target=l_then, ty="bool"))
             hf.instrs.append(HIRInstr(HIRKind.JUMP, target=l_else, ty="void"))
             hf.instrs.append(HIRInstr(HIRKind.LABEL, target=l_then, ty="void"))
             for s in st.then_block.stmts:
@@ -67,7 +67,7 @@ class Lowerer:
             l_head, l_body, l_end = self._tmp(), self._tmp(), self._tmp()
             hf.instrs.append(HIRInstr(HIRKind.LABEL, target=l_head, ty="void"))
             c = self._lower_expr(st.cond, hf)
-            hf.instrs.append(HIRInstr(HIRKind.BR_TRUE, args=[c], target=l_body, ty="bool"))
+            hf.instrs.append(HIRInstr(HIRKind.BRANCH_TRUE, args=[c], target=l_body, ty="bool"))
             hf.instrs.append(HIRInstr(HIRKind.JUMP, target=l_end, ty="void"))
             hf.instrs.append(HIRInstr(HIRKind.LABEL, target=l_body, ty="void"))
             for s in st.body.stmts:
@@ -113,7 +113,7 @@ class Lowerer:
         l_recv, l_default, l_end = self._tmp(), self._tmp(), self._tmp()
         if recv_case and recv_case.channel:
             ch = self._lower_expr(recv_case.channel, hf)
-            hf.instrs.append(HIRInstr(HIRKind.BR_READY, args=[ch], target=l_recv, ty="bool", span=(ex.span.line, ex.span.col)))
+            hf.instrs.append(HIRInstr(HIRKind.BRANCH_READY, args=[ch], target=l_recv, ty="bool", span=(ex.span.line, ex.span.col)))
         hf.instrs.append(HIRInstr(HIRKind.JUMP, target=l_default, ty="void", span=(ex.span.line, ex.span.col)))
 
         hf.instrs.append(HIRInstr(HIRKind.LABEL, target=l_recv, ty="void", span=(ex.span.line, ex.span.col)))
@@ -172,7 +172,7 @@ class Lowerer:
             args = [self._lower_expr(a, hf) for a in ex.args]
             for a in args:
                 hf.instrs.append(HIRInstr(HIRKind.ARG, args=[a], ty="void"))
-            t = self._tmp(); hf.instrs.append(HIRInstr(HIRKind.CALL, dst=t, op=ex.callee.name, args=[str(len(args))], ty=ex.inferred_type or "i32", span=(ex.span.line, ex.span.col))); return t
+            t = self._tmp(); hf.instrs.append(HIRInstr(HIRKind.CALL, dst=t, op=ex.callee.name, args=[], ty=ex.inferred_type or "i32", span=(ex.span.line, ex.span.col))); return t
         t = self._tmp(); hf.instrs.append(HIRInstr(HIRKind.CONST, dst=t, args=["0"], ty="i32", span=(ex.span.line, ex.span.col))); return t
 
 
@@ -195,30 +195,11 @@ def hir_to_mir(hir: HIRModule) -> MIRModule:
                 current = ensure_block(h.target)
                 continue
 
-            op_map = {
-                HIRKind.PARAM: "param",
-                HIRKind.CONST: f"const.{h.ty}",
-                HIRKind.MOVE: f"mov.{h.ty}",
-                HIRKind.UNARY: f"unary.{h.op or ''}",
-                HIRKind.BIN: f"bin.{h.op or ''}",
-                HIRKind.ARG: "arg",
-                HIRKind.CALL: "call",
-                HIRKind.RET: "ret",
-                HIRKind.JUMP: "jmp",
-                HIRKind.BR_TRUE: "br.true",
-                HIRKind.BR_READY: "br.ready",
-                HIRKind.SPAWN: "spawn",
-            }
-            op = op_map.get(h.kind, h.kind.name.lower())
             args = list(h.args)
-            if h.kind == HIRKind.CALL and h.op:
-                args = [h.op, *args]
-            if h.target:
-                args = [*args, h.target]
-            mi = MIRInstr(op, args, h.dst)
+            mi = MIRInstr(kind=h.kind, op=h.op, args=args, dst=h.dst, target=h.target, ty=h.ty)
             current.instrs.append(mi)
 
-            if h.kind in {HIRKind.BR_TRUE, HIRKind.BR_READY} and h.target:
+            if h.kind in {HIRKind.BRANCH_TRUE, HIRKind.BRANCH_READY} and h.target:
                 tblock = ensure_block(h.target)
                 current.succs.add(h.target); tblock.preds.add(current.label)
                 fall = ensure_block(f"fall_{len(mf.order)}")

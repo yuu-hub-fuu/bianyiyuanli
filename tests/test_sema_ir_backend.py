@@ -29,7 +29,7 @@ def test_compile_pipeline_tables_and_cfg():
     assert all(d.level != 'error' for d in res.diagnostics)
     assert res.artifacts.tables['keywords']
     assert res.artifacts.tables['symbols']
-    assert any('BR_TRUE' in ln for ln in res.artifacts.tables['hir_opt'])
+    assert any('BRANCH_TRUE' in ln for ln in res.artifacts.tables['hir_opt'])
     assert 'main' in res.artifacts.cfg
 
 

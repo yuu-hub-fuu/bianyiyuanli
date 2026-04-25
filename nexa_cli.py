@@ -18,7 +18,7 @@ def _print_table(title: str, rows: list[str]) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Nexa compiler")
     ap.add_argument("source", type=Path)
-    ap.add_argument("--dump", choices=["tokens", "tables", "ast", "hir", "cfg", "asm", "all"], default="all")
+    ap.add_argument("--dump", choices=["none", "tokens", "tables", "ast", "hir", "cfg", "asm", "all"], default="none")
     ap.add_argument("--mode", choices=["core", "full"], default="full")
     ap.add_argument("--export-dir", default=None)
     ap.add_argument("--emit-llvm", action="store_true")

@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from nexa.ir.hir import HIRKind
+
 
 @dataclass(slots=True)
 class MIRInstr:
-    op: str
+    kind: HIRKind
+    op: str | None
     args: list[str]
     dst: str | None = None
+    target: str | None = None
+    ty: str = "void"
 
 
 @dataclass(slots=True)

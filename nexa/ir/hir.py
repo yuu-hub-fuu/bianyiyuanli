@@ -15,8 +15,8 @@ class HIRKind(Enum):
     RET = auto()
     LABEL = auto()
     JUMP = auto()
-    BR_TRUE = auto()
-    BR_READY = auto()
+    BRANCH_TRUE = auto()
+    BRANCH_READY = auto()
     SPAWN = auto()
     SELECT = auto()
 

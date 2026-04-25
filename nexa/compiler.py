@@ -116,7 +116,7 @@ def _cfg_dump(fn: MIRFunction) -> list[str]:
             continue
         rows.append(f"[{b}] preds={sorted(blk.preds)} succs={sorted(blk.succs)}")
         for i in blk.instrs:
-            rows.append(f"  {i.op} {i.args} -> {i.dst}")
+            rows.append(f"  {i.kind.name} op={i.op} args={i.args} target={i.target} -> {i.dst}")
     return rows
 
 
