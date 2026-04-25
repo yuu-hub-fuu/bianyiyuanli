@@ -1,4 +1,5 @@
 from nexa.compiler import compile_source
+from nexa_cli import _write_html_report
 
 
 def test_select_default_nonblocking_with_vm_run_and_default_body_effect():
@@ -73,3 +74,21 @@ def test_runtime_errors_are_reported_not_crash():
     res = compile_source(src, mode='core', run=True)
     assert any('运行时错误' in d.message for d in res.diagnostics)
     assert any('runtime error' in line for line in res.run_stdout)
+
+
+def test_vm_trace_available_when_enabled():
+    src = 'fn main() -> i32 { let a: i32 = 1 + 2; return a; }'
+    res = compile_source(src, mode='core', run=True, trace=True)
+    assert res.run_value == 3
+    assert len(res.vm_trace) > 0
+    assert any(fr.instr.startswith('ret') for fr in res.vm_trace)
+
+
+def test_html_report_writer(tmp_path):
+    src = 'fn main() -> i32 { return 0; }'
+    res = compile_source(src, mode='core')
+    out = tmp_path / 'report.html'
+    _write_html_report(out, res)
+    txt = out.read_text(encoding='utf-8')
+    assert 'Nexa 编译报告' in txt
+    assert 'Timeline' in txt

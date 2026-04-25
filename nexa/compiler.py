@@ -17,7 +17,7 @@ from nexa.ir.mir import MIRFunction
 from nexa.opt.passes import run_optimizations
 from nexa.sema.checker import Checker, SemanticResult
 from nexa.sema.monomorphize import monomorphize
-from nexa.vm import HIRVM
+from nexa.vm import HIRVM, VMFrame
 
 
 @dataclass(slots=True)
@@ -41,6 +41,7 @@ class BuildResult:
     timeline: list[StageStatus] = field(default_factory=list)
     run_value: int | None = None
     run_stdout: list[str] = field(default_factory=list)
+    vm_trace: list[VMFrame] = field(default_factory=list)
     llvm_ir: str = ""
 
 
@@ -131,7 +132,13 @@ def validate_llvm_subset(hir_lines: list[str]) -> tuple[bool, str]:
         return False, "LLVM backend only supports core integer subset"
     return True, ""
 
-def compile_source(source: str, mode: str = "full", export_dir: str | None = None, run: bool = False) -> BuildResult:
+def compile_source(
+    source: str,
+    mode: str = "full",
+    export_dir: str | None = None,
+    run: bool = False,
+    trace: bool = False,
+) -> BuildResult:
     diag = DiagnosticBag()
     timeline: list[StageStatus] = []
 
@@ -191,9 +198,14 @@ def compile_source(source: str, mode: str = "full", export_dir: str | None = Non
 
     run_value = None
     run_stdout: list[str] = []
+    vm_trace: list[VMFrame] = []
     if run and not diag.has_errors():
         try:
-            vm_res = HIRVM(hir_opt_mod).run("main")
+            vm = HIRVM(hir_opt_mod)
+            if trace:
+                vm_res, vm_trace = vm.run_with_trace("main")
+            else:
+                vm_res = vm.run("main")
             run_value = vm_res.return_value
             run_stdout = vm_res.stdout
         except Exception as exc:  # noqa: BLE001
@@ -216,6 +228,7 @@ def compile_source(source: str, mode: str = "full", export_dir: str | None = Non
         timeline=timeline,
         run_value=run_value,
         run_stdout=run_stdout,
+        vm_trace=vm_trace,
         llvm_ir=llvm_ir,
     )
 

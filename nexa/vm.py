@@ -140,3 +140,35 @@ class HIRVM:
                 return val(ins.src1)
             ip += 1
         return 0
+
+
+class VMDebugger:
+    """Simple debugger facade over VM trace."""
+
+    def __init__(self, module: HIRModule) -> None:
+        self._vm = HIRVM(module)
+        self._trace: list[VMFrame] = []
+        self._idx = 0
+        self._result: VMResult | None = None
+
+    def start(self, entry: str = "main", max_steps: int = 10000) -> None:
+        self._result, self._trace = self._vm.run_with_trace(entry, max_steps=max_steps)
+        self._idx = 0
+
+    def step(self) -> VMFrame | None:
+        if self._idx >= len(self._trace):
+            return None
+        frame = self._trace[self._idx]
+        self._idx += 1
+        return frame
+
+    def run(self) -> list[VMFrame]:
+        if self._idx >= len(self._trace):
+            return []
+        rem = self._trace[self._idx :]
+        self._idx = len(self._trace)
+        return rem
+
+    @property
+    def result(self) -> VMResult | None:
+        return self._result
